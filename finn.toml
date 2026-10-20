@@ -7,4 +7,4 @@ entrypoint = "xtest.fin"
 [packages]
 
 [scripts]
-test = "finc -I src tests/test_xtest.fin -o test_xtest && ./test_xtest"
+test = "python3 tests/run_tests.py"

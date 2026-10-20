@@ -1,99 +1,92 @@
-// xtest — an enhanced testing framework for Fin.
-//
-// Builds on `testing::std`'s blame-based `assert_*` helpers: xtest records
-// pass/fail counts so one failing check does not abort the whole suite,
-// prints a summary, and can emit JUnit XML for CI.
-//
-// Fin v0.4.0 backend notes (see NOTES.md; testers should file against
-// M1778/Fin):
-//   * No `const` in library modules (not even private) — documented codes are
-//     plain literals.
-//   * No mutable module-level state exists in Fin 0.4.0, so runner state
-//     lives in an explicit `TestStats` struct the caller owns and passes by
-//     `&` to every check. One line of boilerplate buys per-suite isolation
-//     (and nested suites) with zero globals.
-//   * `Collection<StructType>` is refused, so case names are tracked as
-//     `Collection<string>`; failed names are cloned so `xtest_free` can
-//     release them safely even when callers free their `xtest_param` labels.
-
-import { Collection } from collection::std;
-import { len, concat, clone, equals, to_chars } from strings::std;
-import { write_string } from fs::std;
+// xtest: non-aborting checks, registration-indexed cases, and checked JUnit output.
+import { len, concat, clone, equals, to_chars, from_chars } from strings::std;
 
 namespace fin {
 
-// ---------------------------------------------------------------------------
-// Local C bindings (module-private). Vendored rather than imported: only
-// #[global] externs lower through a module import, so the module declares the
-// exact libc ABI it needs, exactly like finson/zhttp do.
-// ---------------------------------------------------------------------------
-
 #[llvm_name="snprintf"]
 @define xtest_snprintf(buf: string, size: ulong, fmt: string, ...) <int>;
-
 #[llvm_name="calloc"]
 @define xtest_calloc(count: ulong, size: ulong) <string>;
-
 #[llvm_name="free"]
 @define xtest_cfree(p: string) <noret>;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+#[llvm_name="fopen"]
+@define xtest_fopen(path: string, mode: string) <&void>;
+#[llvm_name="fputs"]
+@define xtest_fputs(text: string, stream: &void) <int>;
+#[llvm_name="fflush"]
+@define xtest_fflush(stream: &void) <int>;
+#[llvm_name="fclose"]
+@define xtest_fclose(stream: &void) <int>;
 
 #[export]
 pub struct TestStats {
     pub:
-        // Suite name. Caller-owned (usually a string literal); not freed by
-        // xtest_free.
+        // Suite is borrowed; all arrays and their strings are owned by this value.
+        // Do not copy owning stats. current_case aliases cases[current_id].
         suite <string>,
-        // Counters.
         passes <int>,
         failures <int>,
-        // Name of the case currently running; set by xtest_case. Used to tag
-        // failure output and the JUnit report. Caller-owned.
         current_case <string>,
-        // Every case name registered via xtest_case, in order. Cloned on
-        // registration; xtest_free frees them.
-        cases <&Collection<string>>,
-        // Clones of the names of failed cases, in failure order. xtest_free
-        // frees these.
-        failed_cases <&Collection<string>>,
+        current_id <int>,
+        case_count <int>,
+        failed_case_count <int>,
+        capacity <int>,
+        cases <[string]>,
+        case_failures <[int]>,
+        case_messages <[string]>,
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
-// Create fresh stats for a suite. `suite` is usually a string literal; xtest
-// keeps the pointer and never frees it.
 #[export]
 pub fun xtest_new(suite: string) <TestStats> {
     printf("== %s ==\n", suite);
     return TestStats{
-        suite: suite,
-        passes: 0,
-        failures: 0,
-        current_case: "",
-        cases: new Collection::<string>{},
-        failed_cases: new Collection::<string>{}
+        suite: suite, passes: 0, failures: 0, current_case: "", current_id: -1,
+        case_count: 0, failed_case_count: 0, capacity: 4,
+        cases: new [string, 4]{}, case_failures: new [int, 4]{},
+        case_messages: new [string, 4]{}
     };
 }
 
-// Start a named case inside the suite. Subsequent checks are tagged with it
-// in failure output and in the JUnit report. The name is cloned — the caller
-// keeps ownership of `name` and may free it immediately.
-#[export]
-pub fun xtest_case(stats: &TestStats, name: string) <noret> {
-    stats.current_case = name;
-    stats.cases.push(clone(name));
-    printf("  - %s\n", name);
+// Grow only xtest-owned arrays; stdlib collection internals are not involved.
+fun xtest_reserve(stats: &TestStats) <noret> {
+    if (stats.case_count < stats.capacity) { return; }
+    let capacity <int> = stats.capacity * 2;
+    if (capacity < 4) { capacity = 4; }
+    let names <[string]> = new [string, capacity]{};
+    let counts <[int]> = new [int, capacity]{};
+    let messages <[string]> = new [string, capacity]{};
+    for (let i <int> = 0; i < stats.case_count; i++) {
+        names[i] = stats.cases[i];
+        counts[i] = stats.case_failures[i];
+        messages[i] = stats.case_messages[i];
+    }
+    if (stats.cases != null) { delete stats.cases; }
+    if (stats.case_failures != null) { delete stats.case_failures; }
+    if (stats.case_messages != null) { delete stats.case_messages; }
+    stats.cases = names;
+    stats.case_failures = counts;
+    stats.case_messages = messages;
+    stats.capacity = capacity;
 }
 
-// Build a "name[i]" label for parameterized cases, e.g.
-// xtest_param("parse", 3) -> "parse[3]". The returned string is caller-owned:
-// free it with strings::std.free_str when the case is done (xtest_case has
-// already recorded the pointer, and xtest clones any name it must keep).
+// Registration is identity: two equal labels always describe distinct cases.
+// The caller may mutate or free name immediately after this call.
+#[export]
+pub fun xtest_case(stats: &TestStats, name: string) <noret> {
+    xtest_reserve(stats);
+    let owned <string> = clone(name);
+    let id <int> = stats.case_count;
+    stats.cases[id] = owned;
+    stats.case_failures[id] = 0;
+    // finc O0 may evaluate an indexed assignment's RHS twice: allocate first.
+    let messages <string> = clone("");
+    stats.case_messages[id] = messages;
+    stats.case_count += 1;
+    stats.current_id = id;
+    stats.current_case = owned;
+    printf("  - %s\n", owned);
+}
+
 #[export]
 pub fun xtest_param(base: string, i: int) <string> {
     let n <ulong> = cast<ulong>(len(base) + 24);
@@ -102,77 +95,86 @@ pub fun xtest_param(base: string, i: int) <string> {
     return buf;
 }
 
-// Release xtest-owned memory: the cloned case names and failed-case names.
-// `suite` and `current_case` are caller-owned and are NOT freed.
+// Idempotent cleanup, including backing arrays. suite remains borrowed.
 #[export]
 pub fun xtest_free(stats: &TestStats) <noret> {
-    let n <int> = stats.cases.len();
-    for (let i <int> = 0; i < n; i++) {
-        xtest_cfree(stats.cases.get(i));
+    for (let i <int> = 0; i < stats.case_count; i++) {
+        xtest_cfree(stats.cases[i]);
+        xtest_cfree(stats.case_messages[i]);
     }
-    let m <int> = stats.failed_cases.len();
-    for (let j <int> = 0; j < m; j++) {
-        xtest_cfree(stats.failed_cases.get(j));
-    }
+    if (stats.cases != null) { delete stats.cases; }
+    if (stats.case_failures != null) { delete stats.case_failures; }
+    if (stats.case_messages != null) { delete stats.case_messages; }
+    // Fin rejects assigning null directly to an array; a zero-initialized
+    // value supplies empty handles without allocating replacement buffers.
+    let empty <TestStats> = TestStats{};
+    stats.cases = empty.cases;
+    stats.case_failures = empty.case_failures;
+    stats.case_messages = empty.case_messages;
+    stats.current_case = "";
+    stats.current_id = -1;
+    stats.case_count = 0;
+    stats.failed_case_count = 0;
+    stats.capacity = 0;
+    stats.passes = 0;
+    stats.failures = 0;
 }
 
-// ---------------------------------------------------------------------------
-// Checks — record, never abort
-// ---------------------------------------------------------------------------
-
 fun xtest_record(stats: &TestStats, ok: bool, detail: string) <noret> {
+    // Assertions before any registration share a single implicit case.
+    if (stats.current_id < 0) { xtest_case(stats, "(unnamed)"); }
     if (ok) {
         stats.passes += 1;
         return;
     }
+    let id <int> = stats.current_id;
     stats.failures += 1;
-    stats.failed_cases.push(clone(stats.current_case));
-    if (len(stats.current_case) > 0) {
-        printf("    FAIL [%s]: %s\n", stats.current_case, detail);
+    if (stats.case_failures[id] == 0) { stats.failed_case_count += 1; }
+    let previous <string> = stats.case_messages[id];
+    let joined <string> = "";
+    if (stats.case_failures[id] == 0) {
+        joined = clone(detail);
     } else {
-        printf("    FAIL: %s\n", detail);
+        let separated <string> = concat(previous, "\n");
+        joined = concat(separated, detail);
+        xtest_cfree(separated);
     }
+    xtest_cfree(previous);
+    stats.case_messages[id] = joined;
+    stats.case_failures[id] += 1;
+    printf("    FAIL [%s]: %s\n", stats.current_case, detail);
 }
 
 #[export]
 pub fun xtest_check(stats: &TestStats, cond: bool, msg: string) <noret> {
     xtest_record(stats, cond, msg);
 }
-
 #[export]
 pub fun xtest_check_true(stats: &TestStats, cond: bool, msg: string) <noret> {
     xtest_record(stats, cond, msg);
 }
-
 #[export]
 pub fun xtest_check_false(stats: &TestStats, cond: bool, msg: string) <noret> {
     xtest_record(stats, !cond, msg);
 }
-
 #[export]
 pub fun xtest_check_eq_int(stats: &TestStats, actual: int, expected: int, msg: string) <noret> {
-    if (actual == expected) {
-        xtest_record(stats, true, msg);
-        return;
-    }
-    let buf <string> = xtest_calloc(cast<ulong>(96), cast<ulong>(1));
-    xtest_snprintf(buf, cast<ulong>(96), "%s -- expected %d, got %d", msg, expected, actual);
+    if (actual == expected) { xtest_record(stats, true, msg); return; }
+    let n <ulong> = cast<ulong>(len(msg) + 96);
+    let buf <string> = xtest_calloc(n, cast<ulong>(1));
+    xtest_snprintf(buf, n, "%s -- expected %d, got %d", msg, expected, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
-
 #[export]
 pub fun xtest_check_ne_int(stats: &TestStats, actual: int, unexpected: int, msg: string) <noret> {
-    if (actual != unexpected) {
-        xtest_record(stats, true, msg);
-        return;
-    }
-    let buf <string> = xtest_calloc(cast<ulong>(96), cast<ulong>(1));
-    xtest_snprintf(buf, cast<ulong>(96), "%s -- unexpectedly equal (%d)", msg, actual);
+    if (actual != unexpected) { xtest_record(stats, true, msg); return; }
+    let n <ulong> = cast<ulong>(len(msg) + 96);
+    let buf <string> = xtest_calloc(n, cast<ulong>(1));
+    xtest_snprintf(buf, n, "%s -- unexpectedly equal (%d)", msg, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
-
 #[export]
 pub fun xtest_check_eq_bool(stats: &TestStats, actual: bool, expected: bool, msg: string) <noret> {
     let a <int> = 0;
@@ -182,152 +184,130 @@ pub fun xtest_check_eq_bool(stats: &TestStats, actual: bool, expected: bool, msg
     xtest_check_eq_int(stats, a, e, msg);
 }
 
-// null-safe string equality: null normalizes to "". (Comparisons against
-// null are fine; passing null AS a string argument is what the backend
-// refuses.)
+// Null normalizes to the empty string for this compatibility wrapper.
 #[export]
 pub fun xtest_check_eq_str(stats: &TestStats, actual: string, expected: string, msg: string) <noret> {
     let a <string> = actual;
     let e <string> = expected;
     if (a == null) { a = ""; }
     if (e == null) { e = ""; }
-    if (equals(a, e)) {
-        xtest_record(stats, true, msg);
-        return;
-    }
-    let buf <string> = xtest_calloc(cast<ulong>(len(a) + len(e) + 96), cast<ulong>(1));
-    let n <ulong> = cast<ulong>(len(a) + len(e) + 96);
+    if (equals(a, e)) { xtest_record(stats, true, msg); return; }
+    let n <ulong> = cast<ulong>(len(msg) + len(a) + len(e) + 96);
+    let buf <string> = xtest_calloc(n, cast<ulong>(1));
     xtest_snprintf(buf, n, "%s -- expected \"%s\", got \"%s\"", msg, e, a);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
-
-// Approximate double comparison. Stays in doubles: cast<int>(double) is not
-// lowered by the finc 0.4.0 backend.
 #[export]
 pub fun xtest_check_approx(stats: &TestStats, actual: double, expected: double, eps: double, msg: string) <noret> {
     let diff <double> = actual - expected;
     let zero <double> = cast<double>(0);
     if (diff < zero) { diff = zero - diff; }
-    if (diff <= eps) {
-        xtest_record(stats, true, msg);
-        return;
-    }
-    let buf <string> = xtest_calloc(cast<ulong>(160), cast<ulong>(1));
-    xtest_snprintf(buf, cast<ulong>(160), "%s -- expected %g (+/-%g), got %g", msg, expected, eps, actual);
+    if (diff <= eps) { xtest_record(stats, true, msg); return; }
+    let n <ulong> = cast<ulong>(len(msg) + 160);
+    let buf <string> = xtest_calloc(n, cast<ulong>(1));
+    xtest_snprintf(buf, n, "%s -- expected %g (+/-%g), got %g", msg, expected, eps, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
 
-// ---------------------------------------------------------------------------
-// Results
-// ---------------------------------------------------------------------------
-
 #[export]
-pub fun xtest_passes(stats: &TestStats) <int> {
-    return stats.passes;
-}
-
+pub fun xtest_passes(stats: &TestStats) <int> { return stats.passes; }
 #[export]
-pub fun xtest_failures(stats: &TestStats) <int> {
-    return stats.failures;
-}
-
+pub fun xtest_failures(stats: &TestStats) <int> { return stats.failures; }
 #[export]
-pub fun xtest_case_count(stats: &TestStats) <int> {
-    return stats.cases.len();
-}
-
-// Print the suite summary. Returns 0 when every check passed, 1 otherwise —
-// use it as the process exit code: `return xtest_summary(&stats);`
+pub fun xtest_case_count(stats: &TestStats) <int> { return stats.case_count; }
 #[export]
 pub fun xtest_summary(stats: &TestStats) <int> {
     printf("== %s: %d passed, %d failed (%d cases) ==\n",
-           stats.suite, stats.passes, stats.failures, stats.cases.len());
+           stats.suite, stats.passes, stats.failures, stats.case_count);
     if (stats.failures > 0) {
         printf("Failed cases:\n");
-        let n <int> = stats.failed_cases.len();
-        for (let i <int> = 0; i < n; i++) {
-            printf("  x %s\n", stats.failed_cases.get(i));
+        for (let i <int> = 0; i < stats.case_count; i++) {
+            if (stats.case_failures[i] > 0) { printf("  x %s\n", stats.cases[i]); }
         }
         return 1;
     }
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// JUnit XML report
-// ---------------------------------------------------------------------------
-
+// One bounded output allocation, at most six bytes per input byte.
+// XML 1.0 forbids C0 controls except tab/newline/CR; replace them with '?'.
+// Attribute whitespace is represented numerically to preserve exact readback.
 fun xtest_xml_escape(s: string) <string> {
-    // `out` starts as heap memory (never a literal) so xtest_cfree is always
-    // safe below; concat returns a fresh allocation each call.
-    let out <string> = xtest_calloc(cast<ulong>(1), cast<ulong>(1));
+    let count <int> = len(s);
+    blame count <= 357913940, "XML value too large";
     let bytes <[char]> = to_chars(s);
-    for (let i <int> = 0; i < len(s); i++) {
-        let piece <string> = "";
-        let dynamic <bool> = false;
+    let output <[char]> = new [char, count * 6 + 1]{};
+    // One shared entity table avoids allocating per escaped character.
+    let entities <[char]> = to_chars("&amp;&lt;&gt;&quot;&#9;&#10;&#13;");
+    let used <int> = 0;
+    for (let i <int> = 0; i < count; i++) {
         let c <char> = bytes[i];
-        if (c == '&') {
-            piece = "&amp;";
-        } else if (c == '<') {
-            piece = "&lt;";
-        } else if (c == '>') {
-            piece = "&gt;";
-        } else if (c == '"') {
-            piece = "&quot;";
+        let start <int> = 0;
+        let size <int> = 0;
+        if (c == '&') { start = 0; size = 5; }
+        else if (c == '<') { start = 5; size = 4; }
+        else if (c == '>') { start = 9; size = 4; }
+        else if (c == '"') { start = 13; size = 6; }
+        else if (c == '\t') { start = 19; size = 4; }
+        else if (c == '\n') { start = 23; size = 5; }
+        else if (c == '\r') { start = 28; size = 5; }
+        else if (cast<int>(c) >= 0 && cast<int>(c) < 32) { c = '?'; }
+        if (size > 0) {
+            for (let j <int> = 0; j < size; j++) {
+                output[used] = entities[start + j];
+                used++;
+            }
         } else {
-            let buf <string> = xtest_calloc(cast<ulong>(2), cast<ulong>(1));
-            xtest_snprintf(buf, cast<ulong>(2), "%c", c);
-            piece = buf;
-            dynamic = true;
+            output[used] = c;
+            used++;
         }
-        let joined <string> = concat(out, piece);
-        xtest_cfree(out);
-        if (dynamic) { xtest_cfree(piece); }
-        out = joined;
     }
-    return out;
+    let result <string> = from_chars(output, 0, used);
+    delete entities;
+    delete output;
+    delete bytes;
+    return result;
 }
 
-// Write a JUnit XML report for the suite to `path` (overwrites). Returns 0
-// on success, 1 when the file could not be written.
+// Stream the report instead of repeatedly copying the entire document.
+// Always close after opening, even when writing/flushing fails.
 #[export]
 pub fun xtest_junit(stats: &TestStats, path: string) <int> {
-    let suite_esc <string> = xtest_xml_escape(stats.suite);
-    let hn <ulong> = cast<ulong>(len(suite_esc) + 160);
-    let head <string> = xtest_calloc(hn, cast<ulong>(1));
-    xtest_snprintf(head, hn,
-                   "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"%s\" tests=\"%d\" failures=\"%d\">\n",
-                   suite_esc, stats.cases.len(), stats.failures);
-    xtest_cfree(suite_esc);
-
-    let nc <int> = stats.cases.len();
-    for (let i <int> = 0; i < nc; i++) {
-        let cname <string> = stats.cases.get(i);
-        let cesc <string> = xtest_xml_escape(cname);
-        let en <ulong> = cast<ulong>(len(cesc) + 96);
-        let el <string> = xtest_calloc(en, cast<ulong>(1));
-        if (stats.failed_cases.contains(cname)) {
-            xtest_snprintf(el, en,
-                           "  <testcase name=\"%s\"><failure message=\"failed\"/></testcase>\n", cesc);
+    if (path == null) { return 1; }
+    let stream <&void> = xtest_fopen(path, "wb");
+    if (stream == null) { return 1; }
+    let failed <bool> = false;
+    let suite <string> = xtest_xml_escape(stats.suite);
+    let n <ulong> = cast<ulong>(len(suite) + 160);
+    let header <string> = xtest_calloc(n, cast<ulong>(1));
+    xtest_snprintf(header, n,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"%s\" tests=\"%d\" failures=\"%d\">\n",
+        suite, stats.case_count, stats.failed_case_count);
+    if (xtest_fputs(header, stream) < 0) { failed = true; }
+    xtest_cfree(header);
+    xtest_cfree(suite);
+    for (let i <int> = 0; i < stats.case_count; i++) {
+        let name <string> = xtest_xml_escape(stats.cases[i]);
+        if (xtest_fputs("  <testcase name=\"", stream) < 0) { failed = true; }
+        if (xtest_fputs(name, stream) < 0) { failed = true; }
+        xtest_cfree(name);
+        if (stats.case_failures[i] > 0) {
+            let message <string> = xtest_xml_escape(stats.case_messages[i]);
+            if (xtest_fputs("\"><failure message=\"", stream) < 0) { failed = true; }
+            if (xtest_fputs(message, stream) < 0) { failed = true; }
+            if (xtest_fputs("\"/></testcase>\n", stream) < 0) { failed = true; }
+            xtest_cfree(message);
         } else {
-            xtest_snprintf(el, en, "  <testcase name=\"%s\"/>\n", cesc);
+            if (xtest_fputs("\"/>\n", stream) < 0) { failed = true; }
         }
-        let joined <string> = concat(head, el);
-        xtest_cfree(head);
-        xtest_cfree(el);
-        xtest_cfree(cesc);
-        head = joined;
     }
-
-    let tail <string> = concat(head, "</testsuite>\n");
-    xtest_cfree(head);
-
-    let ok <bool> = write_string(path, tail);
-    xtest_cfree(tail);
-    if (ok) { return 0; }
-    return 1;
+    if (xtest_fputs("</testsuite>\n", stream) < 0) { failed = true; }
+    if (xtest_fflush(stream) != 0) { failed = true; }
+    if (xtest_fclose(stream) != 0) { failed = true; }
+    if (failed) { return 1; }
+    return 0;
 }
 
 }

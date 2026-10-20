@@ -24,7 +24,7 @@ fun main() <noret> {
     }
 
     let code <int> = xtest_summary(&stats);
-    xtest_junit(&stats, "junit-example.xml");
+    let report_code <int> = xtest_junit(&stats, "junit-example.xml");
     xtest_free(&stats);
-    if (code != 0) { ex_exit(1); }
+    if (code != 0 || report_code != 0) { ex_exit(1); }
 }

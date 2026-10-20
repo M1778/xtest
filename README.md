@@ -7,12 +7,11 @@ everything. xtest builds the runner on top: named cases, pass/fail counting
 that survives failures, parameterized case labels, and JUnit XML output for
 CI.
 
-> **Verification status:** VERIFIED 2026-10-20 against finc 0.4.0 (built from
-> source 2026-10-19; `libllvm22` installed via apt.llvm.org to satisfy the
-> `libLLVM.so.22.1` link). Self-tests pass (exit 0), example runs, JUnit XML
-> validated. Written against the Fin v0.4.0
-> [agent guide](https://github.com/M1778/Fin/blob/master/docs/agent-guide.md)
-> and the 8 measured finc backend limits documented in the repo.
+> **Verification status:** VERIFIED 2026-10-21 with finc 0.4.0 (contract 3),
+> at `-O0` and `-O2`. The Fin self-tests use independent verification stats;
+> an external subprocess harness checks intentional failure exits, a mutated
+> expectation, JUnit structure, the example, and repeated reporting/cleanup.
+> The optimized suite also passes LeakSanitizer.
 
 ## Install
 
@@ -25,7 +24,7 @@ finn add M1778/xtest
 ## Quick Example
 
 ```fin
-import { TestStats, xtest_new, xtest_case, xtest_check_eq_int,
+import { TestStats, xtest_new, xtest_case, xtest_check, xtest_check_eq_int,
          xtest_summary, xtest_junit, xtest_free } from xtest::fin;
 
 #[llvm_name="exit"]
@@ -41,9 +40,9 @@ fun main() <noret> {
     xtest_check(&stats, true, "placeholder");
 
     let code <int> = xtest_summary(&stats);   // prints totals, returns 0/1
-    xtest_junit(&stats, "junit.xml");         // CI report
+    let report_code <int> = xtest_junit(&stats, "junit.xml");
     xtest_free(&stats);
-    if (code != 0) { ex_exit(1); }
+    if (code != 0 || report_code != 0) { ex_exit(1); }
 }
 ```
 
@@ -60,11 +59,30 @@ fun main() <noret> {
 - **Checks record, never abort.** A failing check prints `FAIL [case]: msg`
   and increments the failure counter; the suite keeps running. Use
   `testing::std`'s `assert_*` when you want abort-on-failure semantics.
-- **Ownership:** `xtest_new` keeps (never frees) your `suite` string —
-  string literals are the normal choice. `xtest_case` **clones** the name,
-  so `xtest_param` labels can be freed with `strings::std.free_str`
-  immediately after the case's checks. `xtest_free` releases all
-  xtest-owned memory (cloned case names).
+- **Ownership:** `xtest_new` borrows your `suite` string until cleanup.
+  `xtest_case` **clones** the name and points `current_case` at that owned clone;
+  caller labels may be changed or freed immediately, even before failing checks.
+  Failure messages are copied. `xtest_free` releases every owned string and array,
+  resets counters, and is safe to repeat. Do not copy a live `TestStats` value:
+  copies would share ownership. Create independent suites with `xtest_new`.
+- **Case identity:** each registration is a distinct case, including duplicate
+  names. Checks before the first registration create one implicit `(unnamed)`
+  case; a later explicit case with that name remains distinct. Zero-check cases
+  are reported as passing. An empty suite has zero cases and succeeds.
+- **State layout change:** public function signatures are unchanged. The old
+  `Collection`-backed `cases` and `failed_cases` fields have been replaced by owned
+  `cases: [string]`, `case_failures: [int]`, and `case_messages: [string]` arrays,
+  with `case_count`, `capacity`, `current_id`, and `failed_case_count` bookkeeping.
+  Treat these fields as implementation state; prefer the public accessors.
+  `passes`/`failures` count checks, while JUnit `failures` counts failing cases.
+  Each failed testcase retains all check diagnostics, newline-separated, in its
+  `<failure message="..."/>` attribute. Summaries list each failed registration once.
+- **JUnit writes:** reports overwrite their destination and check write, flush,
+  and close results. A failed write returns 1 and may leave a partial file; it
+  does not change check counters. Names and diagnostics must be valid UTF-8 XML
+  text; ASCII controls forbidden by XML 1.0 are replaced with `?`. Tab, newline,
+  and carriage return are preserved with numeric entities. NUL terminates a Fin
+  string and cannot be represented. Repeated reports do not modify suite state.
 - **Fixtures:** Fin 0.4.0 has no closures/fn-pointer storage that lowers
   through imports, so setup/teardown is plain functions you call yourself:
 
@@ -114,11 +132,26 @@ db_teardown(db);
 | `xtest_summary(&stats) <int>` | Print totals + failed-case list; returns 0 if all passed, 1 otherwise. |
 | `xtest_junit(&stats, path: string) <int>` | Write JUnit XML (overwrites); 0 on success, 1 on write failure. |
 
+## Validation
+
+```sh
+python3 tests/run_tests.py --finc /path/to/finc --fin-libs /path/to/lib/std
+```
+
+The harness uses only Python's standard library and keeps the framework and
+behavior checks in Fin. It compiles/runs self-tests and the example at `-O0` and
+`-O2`, parses the actual XML externally, checks failing subprocess exit codes,
+and mutates one expectation in a temporary source copy to prove verification
+failures cannot go green. All generated files live in a temporary directory.
+Use `--opt O2` to run one optimization level; `FIN_CC` is forwarded for optional
+sanitizer linking. The `/dev/full` check requires Linux.
+
 ## Dependencies
 
-None beyond the Fin standard library (`collection`, `strings`, `fs`) and
-libc (`snprintf`, `calloc`, `free` — vendored `@define`s, no link flags
-needed). Zero third-party packages.
+None beyond the Fin standard library (`strings`) and libc (`snprintf`, `calloc`,
+`free`, `fopen`, `fputs`, `fflush`, `fclose` — local ABI declarations, no extra link
+flags needed). Python is needed only for the external validation harness.
+Zero third-party packages.
 
 ## License
 

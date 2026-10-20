@@ -1,22 +1,22 @@
-// Tests for xtest — the framework tests itself (dogfooding).
-//
-// Run: finc -I src tests/test_xtest.fin -o test_xtest && ./test_xtest
+// Framework checks use scratch suites; verification uses independent root stats.
+// Full subprocess/XML/mutation coverage: python3 tests/run_tests.py
 import { TestStats, xtest_new, xtest_case, xtest_param,
          xtest_check, xtest_check_true, xtest_check_false,
          xtest_check_eq_int, xtest_check_ne_int, xtest_check_eq_bool,
          xtest_check_eq_str, xtest_check_approx,
          xtest_passes, xtest_failures, xtest_case_count,
          xtest_summary, xtest_junit, xtest_free } from xtest::fin;
-import { free_str, len, to_chars } from strings::std;
+import { free_str, clone, equals, to_chars, from_chars } from strings::std;
 import { read_to_string } from fs::std;
 
-// Process exit so CI sees a nonzero status when recorded checks fail
-// (main is noret in Fin 0.4.0, so the summary's return code is forwarded
-// through libc instead).
 #[llvm_name="exit"]
 @define test_exit(code: int) <noret>;
+#[llvm_name="getenv"]
+@define test_getenv(name: string) <string>;
+#[llvm_name="memset"]
+@define test_memset(text: string, value: int, size: ulong) <string>;
 
-fun check_counters() <noret> {
+fun check_counters(verify: &TestStats) <noret> {
     let s <TestStats> = xtest_new("counters");
     xtest_case(&s, "arithmetic");
     xtest_check(&s, 1 + 1 == 2, "addition works");
@@ -24,106 +24,163 @@ fun check_counters() <noret> {
     xtest_check_false(&s, false, "false is false");
     xtest_check_eq_int(&s, 40 + 2, 42, "int equality");
     xtest_check_ne_int(&s, 7, 8, "int inequality");
-    xtest_check_eq_bool(&s, 1 == 1, true, "bool equality");
+    xtest_check_eq_bool(&s, true, true, "bool equality");
     xtest_check_eq_str(&s, "hello", "hello", "string equality");
     xtest_check_eq_str(&s, "", "", "empty strings equal");
     xtest_check_approx(&s, cast<double>(0.1) + cast<double>(0.2), cast<double>(0.3), cast<double>(0.000001), "double approx");
-    xtest_check_eq_int(&s, xtest_passes(&s), 9, "nine passes recorded");
-    xtest_check_eq_int(&s, xtest_failures(&s), 0, "zero failures recorded");
-    xtest_check_eq_int(&s, xtest_case_count(&s), 1, "one case registered");
+    xtest_check_eq_int(verify, xtest_passes(&s), 9, "nine passes recorded");
+    xtest_check_eq_int(verify, xtest_failures(&s), 0, "zero failures recorded");
+    xtest_check_eq_int(verify, xtest_case_count(&s), 1, "one case registered");
+    xtest_check_eq_int(verify, xtest_summary(&s), 0, "passing summary");
     xtest_free(&s);
 }
 
-fun check_param_labels() <noret> {
+fun check_param_labels(verify: &TestStats) <noret> {
     let s <TestStats> = xtest_new("params");
-    for (let i <int> = 0; i < 3; i++) {
+    for (let i <int> = 0; i < 12; i++) {
         let label <string> = xtest_param("case", i);
         xtest_case(&s, label);
-        xtest_check_eq_int(&s, i * i, i * i, "square is reflexive");
+        test_memset(label, 88, cast<ulong>(4));
         free_str(label);
+        xtest_check(&s, i != 7, "failure after caller frees label");
     }
-    xtest_check_eq_int(&s, xtest_case_count(&s), 3, "three param cases");
-    xtest_check_eq_int(&s, xtest_failures(&s), 0, "no failures");
+    xtest_check_eq_int(verify, xtest_case_count(&s), 12, "array growth preserves cases");
+    xtest_check_eq_int(verify, xtest_passes(&s), 11, "parameter passes");
+    xtest_check_eq_int(verify, xtest_failures(&s), 1, "parameter failure");
+    xtest_check_eq_int(verify, xtest_junit(&s, "params.xml"), 0, "owned labels report");
+    let label <string> = xtest_param("negative", -2147483647 - 1);
+    xtest_check_eq_str(verify, label, "negative[-2147483648]", "minimum integer label");
+    free_str(label);
     xtest_free(&s);
 }
 
-fun check_failure_accounting() <noret> {
-    // Failures must be recorded, not abort: this suite intentionally fails
-    // checks on a scratch TestStats and then verifies the accounting.
+fun check_failure_accounting(verify: &TestStats) <noret> {
     let s <TestStats> = xtest_new("failure-accounting");
     xtest_case(&s, "will-fail");
-    xtest_check(&s, false, "intentional failure one");
-    xtest_check_eq_int(&s, 1, 2, "intentional failure two");
-    xtest_check(&s, true, "still counts a pass after failures");
-    xtest_check_eq_int(&s, xtest_passes(&s), 1, "one pass");
-    xtest_check_eq_int(&s, xtest_failures(&s), 2, "two failures");
-    xtest_check_eq_int(&s, xtest_summary(&s), 1, "summary returns 1 on failure");
+    xtest_check(&s, false, "boolean failure");
+    xtest_check_true(&s, false, "true failure");
+    xtest_check_false(&s, true, "false failure");
+    xtest_check_eq_int(&s, 1, 2, "integer failure");
+    xtest_check_ne_int(&s, 3, 3, "inequality failure");
+    xtest_check_eq_bool(&s, true, false, "bool equality failure");
+    xtest_check_eq_str(&s, "actual", "expected", "string failure");
+    xtest_check_approx(&s, cast<double>(2), cast<double>(1), cast<double>(0.1), "approx failure");
+    xtest_check(&s, true, "continues after eight failures");
+    xtest_check_eq_int(verify, xtest_passes(&s), 1, "one scratch pass");
+    xtest_check_eq_int(verify, xtest_failures(&s), 8, "eight scratch failures");
+    xtest_check_eq_int(verify, xtest_summary(&s), 1, "failure summary");
+    xtest_check_eq_int(verify, xtest_junit(&s, "failures.xml"), 0, "all failure messages report");
     xtest_free(&s);
 }
 
-fun check_junit_output() <noret> {
-    let s <TestStats> = xtest_new("junit & report");
-    xtest_case(&s, "alpha");
-    xtest_check(&s, true, "alpha passes");
-    xtest_case(&s, "beta");
-    xtest_check(&s, false, "beta fails on purpose");
-    let rc <int> = xtest_junit(&s, "/tmp/xtest-report.xml");
-    let s2 <TestStats> = xtest_new("junit-readback");
-    xtest_case(&s2, "write succeeded");
-    xtest_check_eq_int(&s2, rc, 0, "junit write returns 0");
-    let xml? <string> = read_to_string("/tmp/xtest-report.xml");
-    xtest_case(&s2, "report contents");
-    xtest_check(&s2, xml != null, "report file is readable");
-    // crude but effective: the report must name both cases and the suite.
-    let has_alpha <bool> = false;
-    let has_beta <bool> = false;
-    let has_failure <bool> = false;
-    if (xml != null) {
-        // scan for the markers with plain index math
-        has_alpha = contains_sub(xml?, "alpha");
-        has_beta = contains_sub(xml?, "beta");
-        has_failure = contains_sub(xml?, "<failure");
+fun check_junit_output(verify: &TestStats) <noret> {
+    let s <TestStats> = xtest_new("junit & <report> \"quoted\"");
+    xtest_case(&s, "duplicate");
+    xtest_check(&s, true, "first duplicate passes");
+    xtest_case(&s, "duplicate");
+    let detail <string> = clone("first & <failure> \"quoted\"");
+    xtest_check(&s, false, detail);
+    free_str(detail);
+    xtest_check_eq_int(&s, 1, 2, "second failure");
+    xtest_check_eq_int(&s, 3, 4, "A diagnostic message longer than ninety-six bytes must preserve all of its text and the expected and actual values appended after the message");
+    xtest_case(&s, "empty case");
+    xtest_check_eq_int(verify, xtest_failures(&s), 3, "three failed checks");
+    xtest_check_eq_int(verify, xtest_case_count(&s), 3, "duplicate registrations distinct");
+    xtest_check_eq_int(verify, xtest_junit(&s, "junit.xml"), 0, "first report");
+    xtest_check_eq_int(verify, xtest_junit(&s, "junit-repeat.xml"), 0, "repeat report");
+    xtest_check_eq_int(verify, xtest_junit(&s, "missing-directory/report.xml"), 1, "missing directory rejected");
+    xtest_check_eq_int(verify, xtest_junit(&s, "/dev/full"), 1, "flush failure rejected");
+    xtest_check_eq_int(verify, xtest_junit(&s, "junit-after-error.xml"), 0, "report after write error");
+    let xml? <string> = read_to_string("junit.xml");
+    let again? <string> = read_to_string("junit-repeat.xml");
+    xtest_check(verify, xml != null, "report readable");
+    xtest_check(verify, again != null, "repeated report readable");
+    if (xml != null && again != null) {
+        xtest_check(verify, equals(xml?, again?), "reporting does not mutate outcomes");
     }
-    xtest_check(&s2, has_alpha, "report mentions alpha");
-    xtest_check(&s2, has_beta, "report mentions beta");
-    xtest_check(&s2, has_failure, "report marks the failure");
+    if (xml != null) { free_str(xml?); }
+    if (again != null) { free_str(again?); }
     xtest_free(&s);
-    xtest_free(&s2);
 }
 
-fun contains_sub(hay: string, needle: string) <bool> {
-    let hb <[char]> = to_chars(hay);
-    let nb <[char]> = to_chars(needle);
-    let hn <int> = len(hay);
-    let nn <int> = len(needle);
-    if (nn == 0) { return true; }
-    for (let i <int> = 0; i + nn <= hn; i++) {
-        let found <bool> = true;
-        for (let j <int> = 0; j < nn; j++) {
-            if (hb[i + j] != nb[j]) { found = false; }
+fun check_implicit_and_empty(verify: &TestStats) <noret> {
+    let s <TestStats> = xtest_new("implicit");
+    xtest_check(&s, true, "unnamed pass");
+    xtest_check(&s, false, "unnamed failure");
+    xtest_check_eq_int(verify, xtest_case_count(&s), 1, "one implicit case");
+    xtest_case(&s, "(unnamed)");
+    xtest_check(&s, true, "explicit same label stays independent");
+    xtest_check_eq_int(verify, xtest_case_count(&s), 2, "implicit and explicit cases");
+    xtest_check_eq_int(verify, xtest_junit(&s, "implicit.xml"), 0, "implicit failure report");
+    xtest_free(&s);
+    let empty <TestStats> = xtest_new("empty");
+    xtest_check_eq_int(verify, xtest_summary(&empty), 0, "empty summary");
+    xtest_check_eq_int(verify, xtest_case_count(&empty), 0, "empty cases");
+    xtest_check_eq_int(verify, xtest_junit(&empty, "empty.xml"), 0, "empty report");
+    xtest_free(&empty);
+}
+
+fun check_xml_and_lifecycle(verify: &TestStats) <noret> {
+    let s <TestStats> = xtest_new("controls");
+    let bytes <[char]> = to_chars("x\t\n\r &<>\"' café");
+    bytes[0] = cast<char>(1);
+    let label <string> = from_chars(bytes, 0, bytes.length - 1);
+    delete bytes;
+    xtest_case(&s, label);
+    xtest_check(&s, false, label);
+    free_str(label);
+    let controls <[char]> = new [char, 32]{};
+    for (let i <int> = 0; i < 31; i++) { controls[i] = cast<char>(i + 1); }
+    let all_controls <string> = from_chars(controls, 0, 31);
+    delete controls;
+    xtest_case(&s, all_controls);
+    xtest_check(&s, false, all_controls);
+    free_str(all_controls);
+    xtest_case(&s, "");
+    xtest_check(&s, false, "");
+    xtest_check_eq_int(verify, xtest_junit(&s, "controls.xml"), 0, "control sanitation report");
+    xtest_free(&s);
+    xtest_free(&s);
+    xtest_check_eq_int(verify, xtest_case_count(&s), 0, "double cleanup harmless");
+    for (let i <int> = 0; i < 20; i++) {
+        let fresh <TestStats> = xtest_new("lifecycle");
+        for (let j <int> = 0; j < 9; j++) {
+            xtest_case(&fresh, "growth");
+            xtest_check(&fresh, false, "owned diagnostic");
         }
-        if (found) { return true; }
+        xtest_check_eq_int(verify, xtest_junit(&fresh, "lifecycle.xml"), 0, "lifecycle report");
+        xtest_free(&fresh);
+        xtest_free(&fresh);
     }
-    return false;
 }
 
 fun main() <noret> {
+    let mode <string> = test_getenv("XTEST_FAIL_CHILD");
+    if (mode != null) {
+        let child <TestStats> = xtest_new("failing child");
+        xtest_check(&child, false, "intentional child failure");
+        xtest_check(&child, true, "continues after failure");
+        printf("CHILD CONTINUED\n");
+        let result <int> = xtest_summary(&child);
+        xtest_free(&child);
+        test_exit(result);
+        return;
+    }
     let stats <TestStats> = xtest_new("xtest self-tests");
     xtest_case(&stats, "counters");
-    check_counters();
-    xtest_check_eq_int(&stats, 1, 1, "counters sub-suite ran");
+    check_counters(&stats);
     xtest_case(&stats, "param labels");
-    check_param_labels();
-    xtest_check_eq_int(&stats, 1, 1, "param sub-suite ran");
+    check_param_labels(&stats);
     xtest_case(&stats, "failure accounting");
-    check_failure_accounting();
-    xtest_check_eq_int(&stats, 1, 1, "accounting sub-suite ran");
+    check_failure_accounting(&stats);
     xtest_case(&stats, "junit output");
-    check_junit_output();
-    xtest_check_eq_int(&stats, 1, 1, "junit sub-suite ran");
+    check_junit_output(&stats);
+    xtest_case(&stats, "implicit and empty");
+    check_implicit_and_empty(&stats);
+    xtest_case(&stats, "XML and lifecycle");
+    check_xml_and_lifecycle(&stats);
     let code <int> = xtest_summary(&stats);
     xtest_free(&stats);
-    // Forward the summary's pass/fail as the process exit code.
     if (code != 0) {
         printf("SELF-TESTS FAILED\n");
         test_exit(1);
