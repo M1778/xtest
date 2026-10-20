@@ -1,0 +1,30 @@
+// Basic xtest example: a suite with two cases, one parameterized.
+// Run: finc -I ../src basic.fin -o basic && ./basic
+import { TestStats, xtest_new, xtest_case, xtest_param,
+         xtest_check, xtest_check_eq_int, xtest_check_eq_str,
+         xtest_summary, xtest_junit, xtest_free } from xtest::fin;
+import { free_str } from strings::std;
+
+#[llvm_name="exit"]
+@define ex_exit(code: int) <noret>;
+
+fun main() <noret> {
+    let stats <TestStats> = xtest_new("example suite");
+
+    xtest_case(&stats, "strings");
+    xtest_check_eq_str(&stats, "fin", "fin", "identity holds");
+    xtest_check(&stats, 2 * 3 == 6, "multiplication");
+
+    // Parameterized cases: one label per input.
+    for (let i <int> = 0; i < 4; i++) {
+        let label <string> = xtest_param("square", i);
+        xtest_case(&stats, label);
+        xtest_check_eq_int(&stats, i * i, i * i, "square is reflexive");
+        free_str(label);
+    }
+
+    let code <int> = xtest_summary(&stats);
+    xtest_junit(&stats, "junit-example.xml");
+    xtest_free(&stats);
+    if (code != 0) { ex_exit(1); }
+}

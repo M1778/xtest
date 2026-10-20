@@ -1,0 +1,132 @@
+// Tests for xtest — the framework tests itself (dogfooding).
+//
+// Run: finc -I src tests/test_xtest.fin -o test_xtest && ./test_xtest
+import { TestStats, xtest_new, xtest_case, xtest_param,
+         xtest_check, xtest_check_true, xtest_check_false,
+         xtest_check_eq_int, xtest_check_ne_int, xtest_check_eq_bool,
+         xtest_check_eq_str, xtest_check_approx,
+         xtest_passes, xtest_failures, xtest_case_count,
+         xtest_summary, xtest_junit, xtest_free } from xtest::fin;
+import { free_str, len, to_chars } from strings::std;
+import { read_to_string } from fs::std;
+
+// Process exit so CI sees a nonzero status when recorded checks fail
+// (main is noret in Fin 0.4.0, so the summary's return code is forwarded
+// through libc instead).
+#[llvm_name="exit"]
+@define test_exit(code: int) <noret>;
+
+fun check_counters() <noret> {
+    let s <TestStats> = xtest_new("counters");
+    xtest_case(&s, "arithmetic");
+    xtest_check(&s, 1 + 1 == 2, "addition works");
+    xtest_check_true(&s, true, "true is true");
+    xtest_check_false(&s, false, "false is false");
+    xtest_check_eq_int(&s, 40 + 2, 42, "int equality");
+    xtest_check_ne_int(&s, 7, 8, "int inequality");
+    xtest_check_eq_bool(&s, 1 == 1, true, "bool equality");
+    xtest_check_eq_str(&s, "hello", "hello", "string equality");
+    xtest_check_eq_str(&s, "", "", "empty strings equal");
+    xtest_check_approx(&s, cast<double>(0.1) + cast<double>(0.2), cast<double>(0.3), cast<double>(0.000001), "double approx");
+    xtest_check_eq_int(&s, xtest_passes(&s), 9, "nine passes recorded");
+    xtest_check_eq_int(&s, xtest_failures(&s), 0, "zero failures recorded");
+    xtest_check_eq_int(&s, xtest_case_count(&s), 1, "one case registered");
+    xtest_free(&s);
+}
+
+fun check_param_labels() <noret> {
+    let s <TestStats> = xtest_new("params");
+    for (let i <int> = 0; i < 3; i++) {
+        let label <string> = xtest_param("case", i);
+        xtest_case(&s, label);
+        xtest_check_eq_int(&s, i * i, i * i, "square is reflexive");
+        free_str(label);
+    }
+    xtest_check_eq_int(&s, xtest_case_count(&s), 3, "three param cases");
+    xtest_check_eq_int(&s, xtest_failures(&s), 0, "no failures");
+    xtest_free(&s);
+}
+
+fun check_failure_accounting() <noret> {
+    // Failures must be recorded, not abort: this suite intentionally fails
+    // checks on a scratch TestStats and then verifies the accounting.
+    let s <TestStats> = xtest_new("failure-accounting");
+    xtest_case(&s, "will-fail");
+    xtest_check(&s, false, "intentional failure one");
+    xtest_check_eq_int(&s, 1, 2, "intentional failure two");
+    xtest_check(&s, true, "still counts a pass after failures");
+    xtest_check_eq_int(&s, xtest_passes(&s), 1, "one pass");
+    xtest_check_eq_int(&s, xtest_failures(&s), 2, "two failures");
+    xtest_check_eq_int(&s, xtest_summary(&s), 1, "summary returns 1 on failure");
+    xtest_free(&s);
+}
+
+fun check_junit_output() <noret> {
+    let s <TestStats> = xtest_new("junit & report");
+    xtest_case(&s, "alpha");
+    xtest_check(&s, true, "alpha passes");
+    xtest_case(&s, "beta");
+    xtest_check(&s, false, "beta fails on purpose");
+    let rc <int> = xtest_junit(&s, "/tmp/xtest-report.xml");
+    let s2 <TestStats> = xtest_new("junit-readback");
+    xtest_case(&s2, "write succeeded");
+    xtest_check_eq_int(&s2, rc, 0, "junit write returns 0");
+    let xml? <string> = read_to_string("/tmp/xtest-report.xml");
+    xtest_case(&s2, "report contents");
+    xtest_check(&s2, xml != null, "report file is readable");
+    // crude but effective: the report must name both cases and the suite.
+    let has_alpha <bool> = false;
+    let has_beta <bool> = false;
+    let has_failure <bool> = false;
+    if (xml != null) {
+        // scan for the markers with plain index math
+        has_alpha = contains_sub(xml?, "alpha");
+        has_beta = contains_sub(xml?, "beta");
+        has_failure = contains_sub(xml?, "<failure");
+    }
+    xtest_check(&s2, has_alpha, "report mentions alpha");
+    xtest_check(&s2, has_beta, "report mentions beta");
+    xtest_check(&s2, has_failure, "report marks the failure");
+    xtest_free(&s);
+    xtest_free(&s2);
+}
+
+fun contains_sub(hay: string, needle: string) <bool> {
+    let hb <[char]> = to_chars(hay);
+    let nb <[char]> = to_chars(needle);
+    let hn <int> = len(hay);
+    let nn <int> = len(needle);
+    if (nn == 0) { return true; }
+    for (let i <int> = 0; i + nn <= hn; i++) {
+        let found <bool> = true;
+        for (let j <int> = 0; j < nn; j++) {
+            if (hb[i + j] != nb[j]) { found = false; }
+        }
+        if (found) { return true; }
+    }
+    return false;
+}
+
+fun main() <noret> {
+    let stats <TestStats> = xtest_new("xtest self-tests");
+    xtest_case(&stats, "counters");
+    check_counters();
+    xtest_check_eq_int(&stats, 1, 1, "counters sub-suite ran");
+    xtest_case(&stats, "param labels");
+    check_param_labels();
+    xtest_check_eq_int(&stats, 1, 1, "param sub-suite ran");
+    xtest_case(&stats, "failure accounting");
+    check_failure_accounting();
+    xtest_check_eq_int(&stats, 1, 1, "accounting sub-suite ran");
+    xtest_case(&stats, "junit output");
+    check_junit_output();
+    xtest_check_eq_int(&stats, 1, 1, "junit sub-suite ran");
+    let code <int> = xtest_summary(&stats);
+    xtest_free(&stats);
+    // Forward the summary's pass/fail as the process exit code.
+    if (code != 0) {
+        printf("SELF-TESTS FAILED\n");
+        test_exit(1);
+    }
+    printf("SELF-TESTS PASSED\n");
+}

@@ -1,0 +1,10 @@
+[project]
+name = "xtest"
+version = "0.1.0"
+envpath = ".finn"
+entrypoint = "xtest.fin"
+
+[packages]
+
+[scripts]
+test = "finc -I src tests/test_xtest.fin -o test_xtest && ./test_xtest"
