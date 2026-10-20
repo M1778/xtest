@@ -11,9 +11,11 @@ CI.
 > (contract 3), at `-O0` and `-O2`. The Fin self-tests use independent verification
 > stats; an external subprocess harness checks intentional failure exits, a mutated
 > expectation, JUnit structure, the example, and repeated reporting/cleanup.
-> Both optimization levels also pass LeakSanitizer. The harness is prepared for
-> native Windows and macOS, but native execution and cross-platform CI verification
-> remain pending; Linux results do not establish native-platform support.
+> Both optimization levels also pass local LeakSanitizer checks.
+> [Native run 39508662175](https://github.com/M1778/fin-sdk/actions/runs/39508662175)
+> passed this project's O0/O2 regression harness on Windows, macOS, and Linux,
+> each on x86-64 and ARM64; other projects' compiler blockers keep the overall
+> ecosystem run red and do not change these per-project results.
 
 ## Install
 
