@@ -9,6 +9,8 @@ import { TestStats, xtest_new, xtest_case, xtest_param,
 import { free_str, clone, equals, to_chars, from_chars } from strings::std;
 import { read_to_string } from fs::std;
 
+// Portable libc ABI: exit takes a C int; getenv returns a borrowed char*.
+// Only ASCII environment names/values are used; never free getenv's result.
 #[llvm_name="exit"]
 @define test_exit(code: int) <noret>;
 #[llvm_name="getenv"]
@@ -89,7 +91,13 @@ fun check_junit_output(verify: &TestStats) <noret> {
     xtest_check_eq_int(verify, xtest_junit(&s, "junit.xml"), 0, "first report");
     xtest_check_eq_int(verify, xtest_junit(&s, "junit-repeat.xml"), 0, "repeat report");
     xtest_check_eq_int(verify, xtest_junit(&s, "missing-directory/report.xml"), 1, "missing directory rejected");
-    xtest_check_eq_int(verify, xtest_junit(&s, "/dev/full"), 1, "flush failure rejected");
+    // A regular file cannot be a parent directory, on any supported platform.
+    xtest_check_eq_int(verify, xtest_junit(&s, "junit.xml/report.xml"), 1, "file parent rejected");
+    // The Python harness enables this only on Linux. Direct Fin runs stay portable.
+    let linux_full <string> = test_getenv("XTEST_LINUX_DEV_FULL");
+    if (linux_full != null) {
+        xtest_check_eq_int(verify, xtest_junit(&s, "/dev/full"), 1, "flush failure rejected");
+    }
     xtest_check_eq_int(verify, xtest_junit(&s, "junit-after-error.xml"), 0, "report after write error");
     let xml? <string> = read_to_string("junit.xml");
     let again? <string> = read_to_string("junit-repeat.xml");

@@ -7,11 +7,13 @@ everything. xtest builds the runner on top: named cases, pass/fail counting
 that survives failures, parameterized case labels, and JUnit XML output for
 CI.
 
-> **Verification status:** VERIFIED 2026-10-21 with finc 0.4.0 (contract 3),
-> at `-O0` and `-O2`. The Fin self-tests use independent verification stats;
-> an external subprocess harness checks intentional failure exits, a mutated
+> **Verification status:** VERIFIED 2026-10-21 on Linux with finc 0.4.0
+> (contract 3), at `-O0` and `-O2`. The Fin self-tests use independent verification
+> stats; an external subprocess harness checks intentional failure exits, a mutated
 > expectation, JUnit structure, the example, and repeated reporting/cleanup.
-> The optimized suite also passes LeakSanitizer.
+> Both optimization levels also pass LeakSanitizer. The harness is prepared for
+> native Windows and macOS, but native execution and cross-platform CI verification
+> remain pending; Linux results do not establish native-platform support.
 
 ## Install
 
@@ -144,7 +146,21 @@ behavior checks in Fin. It compiles/runs self-tests and the example at `-O0` and
 and mutates one expectation in a temporary source copy to prove verification
 failures cannot go green. All generated files live in a temporary directory.
 Use `--opt O2` to run one optimization level; `FIN_CC` is forwarded for optional
-sanitizer linking. The `/dev/full` check requires Linux.
+sanitizer linking. On Windows, use `python` (or `py -3`) and pass your `finc.exe`
+and standard-library paths. Built programs receive the native `.exe` suffix;
+subprocesses run directly, without shell-dependent exit-code handling.
+
+Missing directories, regular-file parents, and directory write destinations are
+checked on every platform. Only Linux enables the extra `/dev/full` flush-failure
+check, through `XTEST_LINUX_DEV_FULL=1`; direct Fin runs omit it unless enabled.
+The Linux harness also runs the portable path with that variable absent.
+
+Sources and report contents are UTF-8. Report filenames are ASCII relative paths
+under the subprocess working directory, avoiding narrow `fopen` filename-encoding
+assumptions on Windows; arbitrary Unicode Windows report paths are not validated.
+The harness reads XML bytes (honoring its UTF-8 declaration), writes the mutation
+source explicitly as UTF-8, and decodes captured output without depending on the
+console code page. Native Windows/macOS runs and their CI results are still pending.
 
 ## Dependencies
 
