@@ -95,7 +95,8 @@ The `junit.xml` written next to it:
 </testsuite>
 ```
 
-A failing check prints its own diagnostic and the program exits 1:
+A failing check prints its own diagnostic and the program exits 1. These are the
+two lines that change in the example above; the rest of `main` is unchanged:
 
 ```fin fragment
 xtest_case(&stats, "addition");
