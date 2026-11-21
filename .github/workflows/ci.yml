@@ -68,6 +68,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The published finc binaries link against a system LLVM (only the
+      # x86_64 Linux musl archive is static), so the runtime has to be present
+      # before the installed binary can answer --version. This is the same
+      # dependency the compiler's own release CI and the fin-sdk ecosystem
+      # workflow install; it is a toolchain requirement, not a test dependency.
+      - name: Install LLVM runtime for finc
+        if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm22.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-22 clang-22
+
+      - name: Install LLVM runtime for finc
+        if: runner.os == 'macOS'
+        run: brew install llvm@22
+
       - name: Install finc
         run: python3 .github/scripts/install_finc.py --repo-root .
 

@@ -103,7 +103,13 @@ def unpack(archive: Path, dest: Path) -> None:
             zf.extractall(dest)
     else:
         with tarfile.open(archive) as tf:
-            tf.extractall(dest)
+            # The archive's sha256 was verified above, so `data` filtering only
+            # rejects entries that could escape `dest` -- and it avoids the
+            # Python 3.14 default change warning. Older Pythons lack the kwarg.
+            try:
+                tf.extractall(dest, filter="data")
+            except TypeError:
+                tf.extractall(dest)
 
 
 def main() -> int:
@@ -240,8 +246,9 @@ def main() -> int:
         )
         return 1
 
-    # GitHub Actions picks this up; harmless elsewhere.
-    print(f"::add-path::{dest / 'bin'}")
+    # No `::add-path::` here: GitHub disabled that workflow command, and emitting
+    # it fails the step. Callers put `dest/bin` on PATH themselves, or name the
+    # binary directly.
     return 0
 
 
