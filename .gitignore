@@ -1,0 +1,8 @@
+.finc/
+out/
+*.o
+*.obj
+*.exe
+*.xml
+.finn/
+__pycache__/

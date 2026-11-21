@@ -104,7 +104,10 @@ def validate_xml(folder):
     check(cases[0].find("failure") is not None and cases[1].find("failure") is None,
           "implicit case identity")
     report(folder, "empty.xml", 0, 0)
-    _, cases = report(folder, "controls.xml", 3, 3)
+    _, cases = report(folder, "nulls.xml", 1, 1)
+    check(cases[0].attrib["name"] == "" and cases[0].find("failure").attrib["message"] == "",
+          "null text becomes empty text, not a crash")
+    _, cases = report(folder, "controls.xml", 4, 4)
     expected = '?\t\n\r &<>"\' café'
     check(cases[0].attrib["name"] == expected, "control/whitespace/UTF-8 label")
     check(cases[0].find("failure").attrib["message"] == expected,
@@ -115,17 +118,26 @@ def validate_xml(folder):
           "every message control sanitized")
     check(cases[2].attrib["name"] == "" and cases[2].find("failure").attrib["message"] == "",
           "empty case and diagnostic retained")
+    # Invalid UTF-8 and XML noncharacters must not reach the file: one '?' per
+    # offending byte for the broken sequences, '€' surviving intact. A report a
+    # CI consumer cannot decode is not a report.
+    broken = "?" * 13 + "\u20ac"
+    check(cases[3].attrib["name"] == broken, "invalid UTF-8 sanitized, valid UTF-8 kept")
+    check(cases[3].find("failure").attrib["message"] == broken,
+          "invalid message UTF-8 sanitized")
     report(folder, "lifecycle.xml", 9, 9)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    pinned_compiler = ROOT.parent / ".toolchain/bin" / f"finc{EXE_SUFFIX}"
-    pinned_libraries = ROOT.parent / ".toolchain/lib/std"
+    # The CI installer unpacks into ./.finc; prefer it over PATH so a local run
+    # after `python3 .github/scripts/install_finc.py` needs no arguments.
+    installed_compiler = ROOT / ".finc/bin" / f"finc{EXE_SUFFIX}"
+    installed_libraries = ROOT / ".finc/lib/std"
     parser.add_argument("--finc", default=os.environ.get(
-        "FINC", str(pinned_compiler) if pinned_compiler.is_file() else "finc"))
+        "FINC", str(installed_compiler) if installed_compiler.is_file() else "finc"))
     parser.add_argument("--fin-libs", default=os.environ.get(
-        "FIN_LIBS", str(pinned_libraries) if pinned_libraries.is_dir() else None))
+        "FIN_LIBS", str(installed_libraries) if installed_libraries.is_dir() else None))
     parser.add_argument("--opt", action="append", choices=("O0", "O2"))
     args = parser.parse_args()
     source = ROOT / "tests/test_xtest.fin"
@@ -134,6 +146,10 @@ def main():
         base += ["--fin-libs", args.fin_libs]
     # Generated sources/reports live in an isolated directory; the repo stays clean.
     with tempfile.TemporaryDirectory(prefix="xtest-") as temp:
+        # A library module and the package shim must both check clean. Neither
+        # has a `main`, so neither links; this is the frontend gate.
+        for library in (ROOT / "src/xtest.fin", ROOT / "xtest.fin"):
+            run([args.finc, "-I", str(ROOT / "src"), str(library)], ROOT)
         for opt in args.opt or ("O0", "O2"):
             folder = Path(temp) / opt
             folder.mkdir()
@@ -148,15 +164,15 @@ def main():
             result = run([str(binary)], folder, env=env)
             summary = next(line for line in result.stdout.splitlines()
                            if line.startswith("== xtest self-tests:"))
-            expected_passes = 52 if linux_full else 51
-            check(f"{expected_passes} passed, 0 failed (6 cases)" in summary, summary)
+            expected_passes = 56 if linux_full else 55
+            check(f"{expected_passes} passed, 0 failed (7 cases)" in summary, summary)
             validate_xml(folder)
             if linux_full:
                 # Also exercise the Windows/macOS path locally without the device probe.
                 portable_env = dict(env)
                 portable_env.pop("XTEST_LINUX_DEV_FULL")
                 portable = run([str(binary)], folder, env=portable_env)
-                check("51 passed, 0 failed (6 cases)" in portable.stdout,
+                check("55 passed, 0 failed (7 cases)" in portable.stdout,
                       "portable failure checks must pass without /dev/full")
             child_env = dict(env, XTEST_FAIL_CHILD="1")
             child = run([str(binary)], folder, expected=1, env=child_env)

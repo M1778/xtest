@@ -151,6 +151,8 @@ fun check_implicit_and_empty(verify: &TestStats) <noret> {
     xtest_free(&empty);
 }
 
+// A report is only reportable when every attribute is XML 1.0 text. Invalid
+// UTF-8 and the two forbidden BMP characters must not reach the file.
 fun check_xml_and_lifecycle(verify: &TestStats) <noret> {
     let s <TestStats> = xtest_new("controls");
     let bytes <[char]> = to_chars("x\t\n\r &<>\"' café");
@@ -169,6 +171,28 @@ fun check_xml_and_lifecycle(verify: &TestStats) <noret> {
     free_str(all_controls);
     xtest_case(&s, "");
     xtest_check(&s, false, "");
+    let invalid_bytes <[char]> = new [char, 16]{};
+    invalid_bytes[0] = cast<char>(255);   // 0xFF is never a UTF-8 lead byte
+    invalid_bytes[1] = cast<char>(128);   // lone continuation
+    invalid_bytes[2] = cast<char>(192);   // overlong lead C0
+    invalid_bytes[3] = cast<char>(175);
+    invalid_bytes[4] = cast<char>(237);   // UTF-16 surrogate half
+    invalid_bytes[5] = cast<char>(160);
+    invalid_bytes[6] = cast<char>(128);
+    invalid_bytes[7] = cast<char>(239);   // U+FFFE is not an XML 1.0 character
+    invalid_bytes[8] = cast<char>(191);
+    invalid_bytes[9] = cast<char>(190);
+    invalid_bytes[10] = cast<char>(239);  // U+FFFF is not an XML 1.0 character
+    invalid_bytes[11] = cast<char>(191);
+    invalid_bytes[12] = cast<char>(191);
+    invalid_bytes[13] = cast<char>(226);  // U+20AC is valid and must survive
+    invalid_bytes[14] = cast<char>(130);
+    invalid_bytes[15] = cast<char>(172);
+    let invalid <string> = from_chars(invalid_bytes, 0, 16);
+    delete invalid_bytes;
+    xtest_case(&s, invalid);
+    xtest_check(&s, false, invalid);
+    free_str(invalid);
     xtest_check_eq_int(verify, xtest_junit(&s, "controls.xml"), 0, "control sanitation report");
     xtest_free(&s);
     xtest_free(&s);
@@ -183,6 +207,23 @@ fun check_xml_and_lifecycle(verify: &TestStats) <noret> {
         xtest_free(&fresh);
         xtest_free(&fresh);
     }
+}
+
+// A null suite, case label, or diagnostic must be treated as empty text, not
+// dereferenced. A crash in the framework loses the report and the exit status.
+fun check_null_inputs(verify: &TestStats) <noret> {
+    let missing <string> = null;
+    let s <TestStats> = xtest_new(missing);
+    xtest_case(&s, missing);
+    xtest_check(&s, true, missing);
+    xtest_check(&s, false, missing);
+    let label <string> = xtest_param(missing, 3);
+    xtest_check_eq_str(verify, label, "[3]", "null parameter base");
+    free_str(label);
+    xtest_check_eq_int(verify, xtest_junit(&s, "nulls.xml"), 0, "null text still reports");
+    xtest_check_eq_int(verify, xtest_passes(&s), 1, "null check passed");
+    xtest_check_eq_int(verify, xtest_failures(&s), 1, "null check failed");
+    xtest_free(&s);
 }
 
 fun main() <noret> {
@@ -210,6 +251,8 @@ fun main() <noret> {
     check_implicit_and_empty(&stats);
     xtest_case(&stats, "XML and lifecycle");
     check_xml_and_lifecycle(&stats);
+    xtest_case(&stats, "null inputs");
+    check_null_inputs(&stats);
     let code <int> = xtest_summary(&stats);
     xtest_free(&stats);
     if (code != 0) {
