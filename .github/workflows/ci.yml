@@ -1,69 +1,150 @@
+# xtest CI.
+#
+# `finc` comes from the published release, not a source build: this repository
+# needs a compiler, not a compiler development environment. The version is
+# pinned in FINC_VERSION and the archive's SHA-256 is checked against the
+# release index before anything runs.
+#
+# Every lane compiles *and executes* the self-tests and the example. A lane that
+# only type-checked would not have caught the two defects the harness now
+# covers, because both are runtime behavior: a null pointer and the bytes an
+# XML attribute may contain.
+#
+# The library is plain libc (`fopen`, `fputs`, `fclose`, `snprintf`, `calloc`,
+# `free`) with no POSIX-only call, so all three platforms run the same tests.
+# The one platform-conditional check is the `/dev/full` flush-failure probe,
+# which the harness enables only on Linux.
+
 name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, production/hardening]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
+  test:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
+          - runner: macos-15-intel
+            os: macos
+            arch: x86_64
+          - runner: macos-15
+            os: macos
+            arch: aarch64
+          - runner: windows-2025
+            os: windows
+            arch: x86_64
+          - runner: windows-11-arm
+            os: windows
+            arch: aarch64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake ninja-build bison flex python3 pipx clang gpg curl git
-          pipx install conan
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Install LLVM 22
-        run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm22.list > /dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-22-dev clang-22 libllvm22
-
-      - name: Restore finc toolchain cache
-        id: finc-restore
-        uses: actions/cache/restore@v4
+      - uses: actions/setup-python@v5
         with:
-          path: |
-            /tmp/Fin
-            ~/.conan2
-          key: finc-toolchain-v1
+          python-version: "3.12"
 
-      - name: Build finc (on cache miss)
-        if: steps.finc-restore.outputs.cache-hit != 'true'
+      - name: Install finc
         run: |
-          export PATH="$HOME/.local/bin:/usr/lib/llvm-22/bin:$PATH"
-          git clone --depth 1 https://github.com/M1778/Fin.git /tmp/Fin
-          cd /tmp/Fin && ./build.sh --release --no-test
-
-      - name: Save finc toolchain cache
-        if: steps.finc-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            /tmp/Fin
-            ~/.conan2
-          key: finc-toolchain-v1
+          python3 .github/scripts/install_finc.py --repo-root .
+          echo "$PWD/.finc/bin" >> "$GITHUB_PATH"
 
       - name: finc version
-        run: |
-          echo "/tmp/Fin/build" >> "$GITHUB_PATH"
-          /tmp/Fin/build/finc --version
+        run: finc --version
 
-      - name: Frontend check
+      - name: Frontend check (a library has no main, so no link)
         run: |
-          finc src/xtest.fin
+          finc -I src src/xtest.fin
+          finc xtest.fin
 
-      - name: Build and run tests
-        run: |
-          finc tests/test_xtest.fin -I src -o test_xtest && ./test_xtest
+      - name: Run the test harness (compiles and executes at -O0 and -O2)
+        run: python3 tests/run_tests.py --finc "$PWD/.finc/bin/finc" --fin-libs "$PWD/.finc/lib/std"
 
-      - name: Build and run example
+      - name: Package install and consumer build through finn
+        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
         run: |
-          finc examples/basic.fin -I src -o example_basic && ./example_basic
+          # A package that cannot be consumed is not a package. Install finn from
+          # its published release and prove `finn add` + `finn build` + run.
+          curl -fsSL -o finn.tar.gz https://github.com/M1778/finn/releases/download/v1.0.1/finn-linux-x86_64.tar.gz
+          curl -fsSL -o finn.sha256 https://github.com/M1778/finn/releases/download/v1.0.1/finn-linux-x86_64.tar.gz.sha256
+          echo "$(cat finn.sha256)  finn.tar.gz" | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/finn-bin"
+          tar xzf finn.tar.gz -C "$RUNNER_TEMP/finn-bin"
+          chmod +x "$RUNNER_TEMP/finn-bin/finn"
+          export PATH="$RUNNER_TEMP/finn-bin:$PATH"
+          export FIN_COMPILER_PATH="$PWD/.finc/bin/finc"
+          finn --version
+
+          consumer="$RUNNER_TEMP/xtest-consumer"
+          mkdir -p "$consumer/src"
+          cd "$consumer"
+          cat > finn.toml <<'TOML'
+          [project]
+          name = "consumer"
+          version = "0.1.0"
+          envpath = ".finn"
+          entrypoint = "main.fin"
+
+          [packages]
+
+          [scripts]
+          TOML
+          cat > src/main.fin <<'FIN'
+          import { TestStats, xtest_new, xtest_case, xtest_check_eq_int,
+                   xtest_summary, xtest_junit, xtest_free } from xtest::fin;
+          #[llvm_name="exit"]
+          @define con_exit(code: int) <noret>;
+          fun main() <noret> {
+              let s <TestStats> = xtest_new("consumer");
+              xtest_case(&s, "math");
+              xtest_check_eq_int(&s, 2 + 2, 4, "addition");
+              let code <int> = xtest_summary(&s);
+              let report <int> = xtest_junit(&s, "junit-consumer.xml");
+              xtest_free(&s);
+              if (code != 0 || report != 0) { con_exit(1); }
+          }
+          FIN
+          finn add "$GITHUB_WORKSPACE" --yes
+          finn build
+          ./out/consumer
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("junit-consumer.xml").getroot()
+          assert root.attrib["tests"] == "1", root.attrib
+          assert root.attrib["failures"] == "0", root.attrib
+          assert root[0].attrib["name"] == "math", root[0].attrib
+          print("consumer report parsed:", root.attrib)
+          PY
+
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            **/junit*.xml
+          if-no-files-found: warn
