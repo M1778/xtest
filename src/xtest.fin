@@ -1,5 +1,6 @@
 // xtest: non-aborting checks, registration-indexed cases, and checked JUnit output.
-import { len, concat, clone, equals, to_chars, from_chars } from strings::std;
+import { len, concat, clone, equals, to_chars, from_chars, substr } from strings::std;
+import { now, format_rfc3339, free_rfc3339 } from time::std;
 
 namespace fin {
 
@@ -38,9 +39,12 @@ pub struct TestStats {
 
 #[export]
 pub fun xtest_new(suite: string) <TestStats> {
-    printf("== %s ==\n", suite);
+    // A null suite is empty, not a crash: every later printf would dereference it.
+    let title <string> = suite;
+    if (title == null) { title = ""; }
+    printf("== %s ==\n", title);
     return TestStats{
-        suite: suite, passes: 0, failures: 0, current_case: "", current_id: -1,
+        suite: title, passes: 0, failures: 0, current_case: "", current_id: -1,
         case_count: 0, failed_case_count: 0, capacity: 4,
         cases: new [string, 4]{}, case_failures: new [int, 4]{},
         case_messages: new [string, 4]{}
@@ -74,7 +78,9 @@ fun xtest_reserve(stats: &TestStats) <noret> {
 #[export]
 pub fun xtest_case(stats: &TestStats, name: string) <noret> {
     xtest_reserve(stats);
-    let owned <string> = clone(name);
+    let label <string> = name;
+    if (label == null) { label = ""; }
+    let owned <string> = clone(label);
     let id <int> = stats.case_count;
     stats.cases[id] = owned;
     stats.case_failures[id] = 0;
@@ -89,9 +95,11 @@ pub fun xtest_case(stats: &TestStats, name: string) <noret> {
 
 #[export]
 pub fun xtest_param(base: string, i: int) <string> {
-    let n <ulong> = cast<ulong>(len(base) + 24);
+    let prefix <string> = base;
+    if (prefix == null) { prefix = ""; }
+    let n <ulong> = cast<ulong>(len(prefix) + 24);
     let buf <string> = xtest_calloc(n, cast<ulong>(1));
-    xtest_snprintf(buf, n, "%s[%d]", base, i);
+    xtest_snprintf(buf, n, "%s[%d]", prefix, i);
     return buf;
 }
 
@@ -120,6 +128,13 @@ pub fun xtest_free(stats: &TestStats) <noret> {
     stats.failures = 0;
 }
 
+// Null text is treated as empty text, matching `xtest_check_eq_str`. Losing the
+// report to a segmentation fault is worse than losing the distinction.
+fun xtest_text(s: string) <string> {
+    if (s == null) { return ""; }
+    return s;
+}
+
 fun xtest_record(stats: &TestStats, ok: bool, detail: string) <noret> {
     // Assertions before any registration share a single implicit case.
     if (stats.current_id < 0) { xtest_case(stats, "(unnamed)"); }
@@ -127,22 +142,24 @@ fun xtest_record(stats: &TestStats, ok: bool, detail: string) <noret> {
         stats.passes += 1;
         return;
     }
+    let message <string> = detail;
+    if (message == null) { message = ""; }
     let id <int> = stats.current_id;
     stats.failures += 1;
     if (stats.case_failures[id] == 0) { stats.failed_case_count += 1; }
     let previous <string> = stats.case_messages[id];
     let joined <string> = "";
     if (stats.case_failures[id] == 0) {
-        joined = clone(detail);
+        joined = clone(message);
     } else {
         let separated <string> = concat(previous, "\n");
-        joined = concat(separated, detail);
+        joined = concat(separated, message);
         xtest_cfree(separated);
     }
     xtest_cfree(previous);
     stats.case_messages[id] = joined;
     stats.case_failures[id] += 1;
-    printf("    FAIL [%s]: %s\n", stats.current_case, detail);
+    printf("    FAIL [%s]: %s\n", stats.current_case, message);
 }
 
 #[export]
@@ -159,19 +176,21 @@ pub fun xtest_check_false(stats: &TestStats, cond: bool, msg: string) <noret> {
 }
 #[export]
 pub fun xtest_check_eq_int(stats: &TestStats, actual: int, expected: int, msg: string) <noret> {
-    if (actual == expected) { xtest_record(stats, true, msg); return; }
-    let n <ulong> = cast<ulong>(len(msg) + 96);
+    let detail <string> = xtest_text(msg);
+    if (actual == expected) { xtest_record(stats, true, detail); return; }
+    let n <ulong> = cast<ulong>(len(detail) + 96);
     let buf <string> = xtest_calloc(n, cast<ulong>(1));
-    xtest_snprintf(buf, n, "%s -- expected %d, got %d", msg, expected, actual);
+    xtest_snprintf(buf, n, "%s -- expected %d, got %d", detail, expected, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
 #[export]
 pub fun xtest_check_ne_int(stats: &TestStats, actual: int, unexpected: int, msg: string) <noret> {
-    if (actual != unexpected) { xtest_record(stats, true, msg); return; }
-    let n <ulong> = cast<ulong>(len(msg) + 96);
+    let detail <string> = xtest_text(msg);
+    if (actual != unexpected) { xtest_record(stats, true, detail); return; }
+    let n <ulong> = cast<ulong>(len(detail) + 96);
     let buf <string> = xtest_calloc(n, cast<ulong>(1));
-    xtest_snprintf(buf, n, "%s -- unexpectedly equal (%d)", msg, actual);
+    xtest_snprintf(buf, n, "%s -- unexpectedly equal (%d)", detail, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
@@ -191,22 +210,24 @@ pub fun xtest_check_eq_str(stats: &TestStats, actual: string, expected: string, 
     let e <string> = expected;
     if (a == null) { a = ""; }
     if (e == null) { e = ""; }
-    if (equals(a, e)) { xtest_record(stats, true, msg); return; }
-    let n <ulong> = cast<ulong>(len(msg) + len(a) + len(e) + 96);
+    let detail <string> = xtest_text(msg);
+    if (equals(a, e)) { xtest_record(stats, true, detail); return; }
+    let n <ulong> = cast<ulong>(len(detail) + len(a) + len(e) + 96);
     let buf <string> = xtest_calloc(n, cast<ulong>(1));
-    xtest_snprintf(buf, n, "%s -- expected \"%s\", got \"%s\"", msg, e, a);
+    xtest_snprintf(buf, n, "%s -- expected \"%s\", got \"%s\"", detail, e, a);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
 #[export]
 pub fun xtest_check_approx(stats: &TestStats, actual: double, expected: double, eps: double, msg: string) <noret> {
+    let detail <string> = xtest_text(msg);
     let diff <double> = actual - expected;
     let zero <double> = cast<double>(0);
     if (diff < zero) { diff = zero - diff; }
-    if (diff <= eps) { xtest_record(stats, true, msg); return; }
-    let n <ulong> = cast<ulong>(len(msg) + 160);
+    if (diff <= eps) { xtest_record(stats, true, detail); return; }
+    let n <ulong> = cast<ulong>(len(detail) + 160);
     let buf <string> = xtest_calloc(n, cast<ulong>(1));
-    xtest_snprintf(buf, n, "%s -- expected %g (+/-%g), got %g", msg, expected, eps, actual);
+    xtest_snprintf(buf, n, "%s -- expected %g (+/-%g), got %g", detail, expected, eps, actual);
     xtest_record(stats, false, buf);
     xtest_cfree(buf);
 }
@@ -231,9 +252,58 @@ pub fun xtest_summary(stats: &TestStats) <int> {
     return 0;
 }
 
+// One byte as 0..255, independent of the target's `char` signedness.
+fun xtest_byte(bytes: [char], i: int) <int> {
+    let value <int> = cast<int>(bytes[i]);
+    if (value < 0) { value = value + 256; }
+    return value;
+}
+
+fun xtest_cont(bytes: [char], i: int, count: int) <bool> {
+    if (i >= count) { return false; }
+    let value <int> = xtest_byte(bytes, i);
+    return value >= 128 && value <= 191;
+}
+
+// Bytes of one valid XML 1.0 character at `i`, or 0 when the sequence there is
+// not valid UTF-8 or is one of the two BMP noncharacters XML excludes. A report
+// is only reportable when the bytes a reader decodes are the declared UTF-8.
+fun xtest_utf8_len(bytes: [char], i: int, count: int) <int> {
+    let lead <int> = xtest_byte(bytes, i);
+    if (lead < 128) { return 1; }
+    if (lead >= 194 && lead <= 223) {
+        if (xtest_cont(bytes, i + 1, count)) { return 2; }
+        return 0;
+    }
+    if (lead >= 224 && lead <= 239) {
+        if (i + 2 >= count) { return 0; }
+        let next <int> = xtest_byte(bytes, i + 1);
+        if (next < 128 || next > 191) { return 0; }
+        if (lead == 224 && next < 160) { return 0; }
+        if (lead == 237 && next > 159) { return 0; }
+        if (!xtest_cont(bytes, i + 2, count)) { return 0; }
+        if (lead == 239 && next == 191) {
+            let last <int> = xtest_byte(bytes, i + 2);
+            if (last == 190 || last == 191) { return 0; }
+        }
+        return 3;
+    }
+    if (lead >= 240 && lead <= 244) {
+        if (i + 3 >= count) { return 0; }
+        let next <int> = xtest_byte(bytes, i + 1);
+        if (next < 128 || next > 191) { return 0; }
+        if (lead == 240 && next < 144) { return 0; }
+        if (lead == 244 && next > 143) { return 0; }
+        if (!xtest_cont(bytes, i + 2, count) || !xtest_cont(bytes, i + 3, count)) { return 0; }
+        return 4;
+    }
+    return 0;
+}
+
 // One bounded output allocation, at most six bytes per input byte.
 // XML 1.0 forbids C0 controls except tab/newline/CR; replace them with '?'.
 // Attribute whitespace is represented numerically to preserve exact readback.
+// Invalid UTF-8 becomes one '?' per offending byte, so the file stays parseable.
 fun xtest_xml_escape(s: string) <string> {
     let count <int> = len(s);
     blame count <= 357913940, "XML value too large";
@@ -242,7 +312,8 @@ fun xtest_xml_escape(s: string) <string> {
     // One shared entity table avoids allocating per escaped character.
     let entities <[char]> = to_chars("&amp;&lt;&gt;&quot;&#9;&#10;&#13;");
     let used <int> = 0;
-    for (let i <int> = 0; i < count; i++) {
+    let i <int> = 0;
+    while (i < count) {
         let c <char> = bytes[i];
         let start <int> = 0;
         let size <int> = 0;
@@ -259,9 +330,24 @@ fun xtest_xml_escape(s: string) <string> {
                 output[used] = entities[start + j];
                 used++;
             }
+            i++;
+        } else if (cast<int>(c) < 0 || cast<int>(c) >= 128) {
+            let width <int> = xtest_utf8_len(bytes, i, count);
+            if (width == 0) {
+                output[used] = '?';
+                used++;
+                i++;
+            } else {
+                for (let j <int> = 0; j < width; j++) {
+                    output[used] = bytes[i + j];
+                    used++;
+                }
+                i = i + width;
+            }
         } else {
             output[used] = c;
             used++;
+            i++;
         }
     }
     let result <string> = from_chars(output, 0, used);
