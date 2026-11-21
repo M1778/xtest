@@ -146,6 +146,10 @@ def main():
         base += ["--fin-libs", args.fin_libs]
     # Generated sources/reports live in an isolated directory; the repo stays clean.
     with tempfile.TemporaryDirectory(prefix="xtest-") as temp:
+        # A library module and the package shim must both check clean. Neither
+        # has a `main`, so neither links; this is the frontend gate.
+        for library in (ROOT / "src/xtest.fin", ROOT / "xtest.fin"):
+            run([args.finc, "-I", str(ROOT / "src"), str(library)], ROOT)
         for opt in args.opt or ("O0", "O2"):
             folder = Path(temp) / opt
             folder.mkdir()

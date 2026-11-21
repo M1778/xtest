@@ -69,20 +69,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install finc
-        run: |
-          python3 .github/scripts/install_finc.py --repo-root .
-          echo "$PWD/.finc/bin" >> "$GITHUB_PATH"
+        run: python3 .github/scripts/install_finc.py --repo-root .
 
-      - name: finc version
-        run: finc --version
-
-      - name: Frontend check (a library has no main, so no link)
-        run: |
-          finc -I src src/xtest.fin
-          finc xtest.fin
-
-      - name: Run the test harness (compiles and executes at -O0 and -O2)
-        run: python3 tests/run_tests.py --finc "$PWD/.finc/bin/finc" --fin-libs "$PWD/.finc/lib/std"
+      # $GITHUB_PATH carries a POSIX path under Git Bash on Windows, which the
+      # Windows runner does not resolve, so nothing here depends on PATH: the
+      # harness locates ./.finc itself, and runs the library frontend checks.
+      - name: Run the test harness (frontend check, then execute at -O0 and -O2)
+        run: python3 tests/run_tests.py
 
       - name: Package install and consumer build through finn
         if: matrix.os == 'linux' && matrix.arch == 'x86_64'
