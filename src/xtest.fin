@@ -22,8 +22,7 @@
 // =============================================================================
 
 // xtest: non-aborting checks, registration-indexed cases, and checked JUnit output.
-import { len, concat, clone, equals, to_chars, from_chars, substr } from strings::std;
-import { now, format_rfc3339, free_rfc3339 } from time::std;
+import { len, concat, clone, equals, to_chars, from_chars } from strings::std;
 
 namespace fin {
 
