@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="params" tests="12" failures="1">
+  <testcase name="case[0]"/>
+  <testcase name="case[1]"/>
+  <testcase name="case[2]"/>
+  <testcase name="case[3]"/>
+  <testcase name="case[4]"/>
+  <testcase name="case[5]"/>
+  <testcase name="case[6]"/>
+  <testcase name="case[7]"><failure message="failure after caller frees label"/></testcase>
+  <testcase name="case[8]"/>
+  <testcase name="case[9]"/>
+  <testcase name="case[10]"/>
+  <testcase name="case[11]"/>
+</testsuite>

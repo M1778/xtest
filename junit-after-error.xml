@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="junit &amp; &lt;report&gt; &quot;quoted&quot;" tests="3" failures="1">
+  <testcase name="duplicate"/>
+  <testcase name="duplicate"><failure message="first &amp; &lt;failure&gt; &quot;quoted&quot;&#10;second failure -- expected 2, got 1&#10;A diagnostic message longer than ninety-six bytes must preserve all of its text and the expected and actual values appended after the message -- expected 4, got 3"/></testcase>
+  <testcase name="empty case"/>
+</testsuite>
