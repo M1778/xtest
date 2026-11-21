@@ -68,21 +68,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The published finc binaries link against a system LLVM (only the
-      # x86_64 Linux musl archive is static), so the runtime has to be present
-      # before the installed binary can answer --version. This is the same
-      # dependency the compiler's own release CI and the fin-sdk ecosystem
-      # workflow install; it is a toolchain requirement, not a test dependency.
+      # finc links every program it builds with -lLLVM-22 on Linux (see
+      # Fin/src/utils/Process.cpp: defaultLinkLibs), and the published
+      # x86_64-gnu/aarch64-gnu compilers themselves need libLLVM.so.22.1. Both
+      # come from libllvm22: it ships the runtime and the `libLLVM-22.so`
+      # linker name inside the multiarch directory `cc` already searches, so no
+      # -L or FIN_LDFLAGS is needed. This is the dependency the compiler's own
+      # packaging declares (release.yml: deb_dep=libllvm22).
       - name: Install LLVM runtime for finc
-        if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+        if: runner.os == 'Linux'
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
             | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
             | sudo tee /etc/apt/sources.list.d/llvm22.list > /dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-22 clang-22
+          sudo apt-get install -y -qq libllvm22
 
+      # Apple's default link line is chosen by finc itself: on __APPLE__ it
+      # asks Homebrew for the keg and emits -L<keg> -lLLVM. Only the runtime
+      # has to be present. Each macOS artifact records the Homebrew prefix of
+      # the architecture it was built for (/opt/homebrew on arm64, /usr/local
+      # on x86_64), which is where `brew install` puts this keg on that runner.
       - name: Install LLVM runtime for finc
         if: runner.os == 'macOS'
         run: brew install llvm@22
