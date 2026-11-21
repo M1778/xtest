@@ -89,11 +89,14 @@ jobs:
         run: |
           # A package that cannot be consumed is not a package. Install finn from
           # its published release and prove `finn add` + `finn build` + run.
-          curl -fsSL -o finn.tar.gz https://github.com/M1778/finn/releases/download/v1.0.1/finn-linux-x86_64.tar.gz
-          curl -fsSL -o finn.sha256 https://github.com/M1778/finn/releases/download/v1.0.1/finn-linux-x86_64.tar.gz.sha256
-          echo "$(cat finn.sha256)  finn.tar.gz" | sha256sum --check --status
+          finn_archive=finn-linux-x86_64.tar.gz
+          curl -fsSL -o "$finn_archive" "https://github.com/M1778/finn/releases/download/v1.0.1/$finn_archive"
+          curl -fsSL -o "$finn_archive.sha256" "https://github.com/M1778/finn/releases/download/v1.0.1/$finn_archive.sha256"
+          # The published .sha256 already names the archive; verifying its own
+          # line is the check, so the filename must not be appended again.
+          sha256sum --check --strict "$finn_archive.sha256"
           mkdir -p "$RUNNER_TEMP/finn-bin"
-          tar xzf finn.tar.gz -C "$RUNNER_TEMP/finn-bin"
+          tar xzf "$finn_archive" -C "$RUNNER_TEMP/finn-bin"
           chmod +x "$RUNNER_TEMP/finn-bin/finn"
           export PATH="$RUNNER_TEMP/finn-bin:$PATH"
           export FIN_COMPILER_PATH="$PWD/.finc/bin/finc"
