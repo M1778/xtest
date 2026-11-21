@@ -1,4 +1,27 @@
 #!/usr/bin/env python3
+# =============================================================================
+# Fin Programming Language
+#
+# Made with ❤️ for someone special.
+#
+# This project is genuinely built on love and dedication, a way to express your love can be done through Fin.
+# Fin is a semi-object-orientated programming language that specialized in control, giving so much control to the user while asking for the bare minimum.
+# Fin is the name of the Angel from BlackNightmare-Stories not yet published.
+# “Love is the reason this project exists”
+# -----------------------------------------------------------------------------
+# Author: M1778
+# Repository: https://github.com/M1778/xtest
+# Profile: https://github.com/M1778M/
+# -----------------------------------------------------------------------------
+# Copyright (C) 2027 M1778
+#
+# This file is part of xtest, a project for the Fin Programming Language.
+#
+# Licensed under the MIT License. See LICENSE in the repository root.
+#
+# SPDX-License-Identifier: MIT
+# =============================================================================
+
 """Run the Fin framework tests, negative children, mutation, and XML assertions."""
 import argparse
 import os
@@ -107,12 +130,14 @@ def validate_xml(folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    pinned_compiler = ROOT.parent / ".toolchain/bin" / f"finc{EXE_SUFFIX}"
-    pinned_libraries = ROOT.parent / ".toolchain/lib/std"
+    # The CI installer unpacks into ./.finc; prefer it over PATH so a local run
+    # after `python3 .github/scripts/install_finc.py` needs no arguments.
+    installed_compiler = ROOT / ".finc/bin" / f"finc{EXE_SUFFIX}"
+    installed_libraries = ROOT / ".finc/lib/std"
     parser.add_argument("--finc", default=os.environ.get(
-        "FINC", str(pinned_compiler) if pinned_compiler.is_file() else "finc"))
+        "FINC", str(installed_compiler) if installed_compiler.is_file() else "finc"))
     parser.add_argument("--fin-libs", default=os.environ.get(
-        "FIN_LIBS", str(pinned_libraries) if pinned_libraries.is_dir() else None))
+        "FIN_LIBS", str(installed_libraries) if installed_libraries.is_dir() else None))
     parser.add_argument("--opt", action="append", choices=("O0", "O2"))
     args = parser.parse_args()
     source = ROOT / "tests/test_xtest.fin"
