@@ -1,2 +1,4 @@
-// Export symbols from the main library file
-export * from "src/xtest";
+// Package layout marker for finn: it is detected by presence, not parsed.
+// There is no executable re-export syntax in Fin; the API lives in
+// src/xtest.fin (namespace fin) and the root xtest.fin forwards it.
+// Consumers write: import { TestStats, xtest_new } from xtest::fin;

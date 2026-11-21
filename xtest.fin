@@ -1,0 +1,7 @@
+// Package entry module: makes `import { ... } from xtest::fin;` resolve after
+// `finn add`. finn puts a dependency's own root on the library search path, so
+// the package name must exist as <root>/xtest.fin; the implementation lives in
+// src/xtest.fin and is forwarded here.
+namespace fin {
+    import * from src.xtest;
+}
