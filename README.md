@@ -166,7 +166,14 @@ under the subprocess working directory, avoiding narrow `fopen` filename-encodin
 assumptions on Windows; arbitrary Unicode Windows report paths are not validated.
 The harness reads XML bytes (honoring its UTF-8 declaration), writes the mutation
 source explicitly as UTF-8, and decodes captured output without depending on the
-console code page. Native Windows/macOS runs and their CI results are still pending.
+console code page.
+
+**This repository's own CI runs Linux only.** The native run linked above is from
+`M1778/fin-sdk`, which built and ran this project on Windows, macOS and Linux, each on
+x86-64 and ARM64 — that is real evidence for those platforms, but it lives in another
+repository and does not run on every push here. Until `.github/workflows/ci.yml` has a
+matrix, a change to this framework is tested on Linux before it is merged and on the other
+platforms afterwards, which is the wrong order.
 
 ## Dependencies
 
