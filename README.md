@@ -41,9 +41,10 @@ and runs the harness on Linux, macOS and Windows, on x86-64 and ARM64.
 ## Install
 
 ```sh
-finn add M1778/xtest
+finn add --yes M1778/xtest
 ```
 
+<<<<<<< HEAD
 Then import from `xtest::fin`. `finn` puts the dependency root on the library
 search path, and the root `xtest.fin` forwards the namespace to `src/xtest.fin`.
 
@@ -58,6 +59,13 @@ finc -I /path/to/xtest/src my_tests.fin -o my_tests
 ```
 
 ## Complete example
+=======
+No registry resolves these names yet, so `--yes` is required: without it `finn add` refuses
+a source the register has not vouched for rather than installing it unasked. Drop the flag
+once a registry entry exists.
+
+## Quick Example
+>>>>>>> origin/master
 
 ```fin
 import { TestStats, xtest_new, xtest_case, xtest_check, xtest_check_eq_int,
@@ -218,10 +226,38 @@ self-tests and the example at `-O0` and `-O2`, parses every XML report with
 in a temporary copy to prove a wrong expectation cannot go green. Generated
 files stay in a temporary directory.
 
+<<<<<<< HEAD
 `tests/test_xtest.fin` is itself a suite: the framework reports on its own
 behavior, including deliberate failures whose diagnostics you will see in its
 output. Those `FAIL` lines are the negative tests, not a broken run; the exit
 status and the final totals are what matter.
+=======
+Missing directories, regular-file parents, and directory write destinations are
+checked on every platform. Only Linux enables the extra `/dev/full` flush-failure
+check, through `XTEST_LINUX_DEV_FULL=1`; direct Fin runs omit it unless enabled.
+The Linux harness also runs the portable path with that variable absent.
+
+Sources and report contents are UTF-8. Report filenames are ASCII relative paths
+under the subprocess working directory, avoiding narrow `fopen` filename-encoding
+assumptions on Windows; arbitrary Unicode Windows report paths are not validated.
+The harness reads XML bytes (honoring its UTF-8 declaration), writes the mutation
+source explicitly as UTF-8, and decodes captured output without depending on the
+console code page.
+
+**This repository's own CI runs Linux only.** The native run linked above is from
+`M1778/fin-sdk`, which built and ran this project on Windows, macOS and Linux, each on
+x86-64 and ARM64 — that is real evidence for those platforms, but it lives in another
+repository and does not run on every push here. Until `.github/workflows/ci.yml` has a
+matrix, a change to this framework is tested on Linux before it is merged and on the other
+platforms afterwards, which is the wrong order.
+
+## Dependencies
+
+None beyond the Fin standard library (`strings`) and libc (`snprintf`, `calloc`,
+`free`, `fopen`, `fputs`, `fflush`, `fclose` — local ABI declarations, no extra link
+flags needed). Python is needed only for the external validation harness.
+Zero third-party packages.
+>>>>>>> origin/master
 
 ## License
 

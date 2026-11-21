@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="failure-accounting" tests="1" failures="1">
+  <testcase name="will-fail"><failure message="boolean failure&#10;true failure&#10;false failure&#10;integer failure -- expected 2, got 1&#10;inequality failure -- unexpectedly equal (3)&#10;bool equality failure -- expected 0, got 1&#10;string failure -- expected &quot;expected&quot;, got &quot;actual&quot;&#10;approx failure -- expected 1 (+/-0.1), got 2"/></testcase>
+</testsuite>

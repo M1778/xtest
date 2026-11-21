@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="implicit" tests="2" failures="1">
+  <testcase name="(unnamed)"><failure message="unnamed failure"/></testcase>
+  <testcase name="(unnamed)"/>
+</testsuite>

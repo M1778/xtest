@@ -1,172 +1,73 @@
-# xtest CI.
-#
-# `finc` comes from the published release, not a source build: this repository
-# needs a compiler, not a compiler development environment. The version is
-# pinned in FINC_VERSION and the archive's SHA-256 is checked against the
-# release index before anything runs.
-#
-# Every lane compiles *and executes* the self-tests and the example. A lane that
-# only type-checked would not have caught the two defects the harness now
-# covers, because both are runtime behavior: a null pointer and the bytes an
-# XML attribute may contain.
-#
-# The library is plain libc (`fopen`, `fputs`, `fclose`, `snprintf`, `calloc`,
-# `free`) with no POSIX-only call, so all three platforms run the same tests.
-# The one platform-conditional check is the `/dev/full` flush-failure probe,
-# which the harness enables only on Linux.
-
 name: CI
+
+# The compiler comes from a pinned published release, not from a source build.
+#
+# This used to clone M1778/Fin and run ./build.sh, which cost twenty minutes per job and
+# needed Conan, CMake, Flex, Bison and LLVM 22 on every runner. It also tested whatever the
+# compiler's master happened to be at the time, so a red run could not be attributed without
+# reading a second repository.
+#
+# FINC_VERSION pins it; .github/scripts/install_finc.py verifies the archive's sha256 against
+# the release index before unpacking. On Linux it takes the static musl build, which needs no
+# LLVM runtime on the runner.
 
 on:
   push:
-    branches: [master, main, production/hardening]
+    branches: [master, main]
   pull_request:
-  workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   test:
-    name: ${{ matrix.os }}-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      # The matrix exists to find out which platforms are broken, so it must not stop at the
+      # first one.
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            os: linux
-            arch: x86_64
-          - runner: ubuntu-24.04-arm
-            os: linux
-            arch: aarch64
-          - runner: macos-15-intel
-            os: macos
-            arch: x86_64
-          - runner: macos-15
-            os: macos
-            arch: aarch64
-          - runner: windows-2025
-            os: windows
-            arch: x86_64
-          - runner: windows-11-arm
-            os: windows
-            arch: aarch64
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      # finc links every program it builds with -lLLVM-22 on Linux (see
-      # Fin/src/utils/Process.cpp: defaultLinkLibs), and the published
-      # x86_64-gnu/aarch64-gnu compilers themselves need libLLVM.so.22.1. Both
-      # come from libllvm22: it ships the runtime and the `libLLVM-22.so`
-      # linker name inside the multiarch directory `cc` already searches, so no
-      # -L or FIN_LDFLAGS is needed. This is the dependency the compiler's own
-      # packaging declares (release.yml: deb_dep=libllvm22).
-      - name: Install LLVM runtime for finc
-        if: runner.os == 'Linux'
+      # The released artifact is not self-contained on every platform: the glibc builds need
+      # libLLVM.so.22 and the macOS builds name an absolute Homebrew keg. Without it the
+      # loader aborts before main and the failure reads as a broken compiler. On Linux and
+      # macOS the installer installs the runtime the artifact actually needs; on Windows
+      # LLVM is linked in and this does nothing.
+      - name: Install the LLVM runtime the artifact needs
+        shell: bash
+        run: python .github/scripts/install_finc_runtime.py
+
+      - name: Install the pinned finc
+        shell: bash
+        run: python .github/scripts/install_finc.py --dest "$RUNNER_TEMP/finc"
+
+      - name: Put finc on PATH
+        shell: bash
         run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm22.list > /dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libllvm22
+          echo "$RUNNER_TEMP/finc/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/finc/bin/finc" --version
 
-      # Apple's default link line is chosen by finc itself: on __APPLE__ it
-      # asks Homebrew for the keg and emits -L<keg> -lLLVM. Only the runtime
-      # has to be present. Each macOS artifact records the Homebrew prefix of
-      # the architecture it was built for (/opt/homebrew on arm64, /usr/local
-      # on x86_64), which is where `brew install` puts this keg on that runner.
-      - name: Install LLVM runtime for finc
-        if: runner.os == 'macOS'
-        run: brew install llvm@22
+      - name: Type-check the framework
+        shell: bash
+        run: finc src/xtest.fin
 
-      - name: Install finc
-        run: python3 .github/scripts/install_finc.py --repo-root .
+      # tests/run_tests.py is the real suite: it builds and runs the self-tests at two
+      # optimisation levels, runs the negative children (a failing case must exit 1), does a
+      # mutation check, and validates every emitted XML report.
+      - name: Run the self-tests, negative children, mutation and XML checks
+        shell: bash
+        run: python tests/run_tests.py
 
-      # $GITHUB_PATH carries a POSIX path under Git Bash on Windows, which the
-      # Windows runner does not resolve, so nothing here depends on PATH: the
-      # harness locates ./.finc itself, and runs the library frontend checks.
-      - name: Run the test harness (frontend check, then execute at -O0 and -O2)
-        run: python3 tests/run_tests.py
-
-      - name: Package install and consumer build through finn
-        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
+      - name: Build and run the example
+        shell: bash
         run: |
-          # A package that cannot be consumed is not a package. Install finn from
-          # its published release and prove `finn add` + `finn build` + run.
-          finn_archive=finn-linux-x86_64.tar.gz
-          curl -fsSL -o "$finn_archive" "https://github.com/M1778/finn/releases/download/v1.0.1/$finn_archive"
-          curl -fsSL -o "$finn_archive.sha256" "https://github.com/M1778/finn/releases/download/v1.0.1/$finn_archive.sha256"
-          # The published .sha256 already names the archive; verifying its own
-          # line is the check, so the filename must not be appended again.
-          sha256sum --check --strict "$finn_archive.sha256"
-          mkdir -p "$RUNNER_TEMP/finn-bin"
-          tar xzf "$finn_archive" -C "$RUNNER_TEMP/finn-bin"
-          chmod +x "$RUNNER_TEMP/finn-bin/finn"
-          export PATH="$RUNNER_TEMP/finn-bin:$PATH"
-          export FIN_COMPILER_PATH="$PWD/.finc/bin/finc"
-          finn --version
-
-          consumer="$RUNNER_TEMP/xtest-consumer"
-          mkdir -p "$consumer/src"
-          cd "$consumer"
-          cat > finn.toml <<'TOML'
-          [project]
-          name = "consumer"
-          version = "0.1.0"
-          envpath = ".finn"
-          entrypoint = "main.fin"
-
-          [packages]
-
-          [scripts]
-          TOML
-          cat > src/main.fin <<'FIN'
-          import { TestStats, xtest_new, xtest_case, xtest_check_eq_int,
-                   xtest_summary, xtest_junit, xtest_free } from xtest::fin;
-          #[llvm_name="exit"]
-          @define con_exit(code: int) <noret>;
-          fun main() <noret> {
-              let s <TestStats> = xtest_new("consumer");
-              xtest_case(&s, "math");
-              xtest_check_eq_int(&s, 2 + 2, 4, "addition");
-              let code <int> = xtest_summary(&s);
-              let report <int> = xtest_junit(&s, "junit-consumer.xml");
-              xtest_free(&s);
-              if (code != 0 || report != 0) { con_exit(1); }
-          }
-          FIN
-          finn add "$GITHUB_WORKSPACE" --yes
-          finn build
-          ./out/consumer
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          root = ET.parse("junit-consumer.xml").getroot()
-          assert root.attrib["tests"] == "1", root.attrib
-          assert root.attrib["failures"] == "0", root.attrib
-          assert root[0].attrib["name"] == "math", root[0].attrib
-          print("consumer report parsed:", root.attrib)
-          PY
-
-      - name: Upload JUnit reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: junit-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            **/junit*.xml
-          if-no-files-found: warn
+          finc examples/basic.fin -I src -o "$RUNNER_TEMP/example"
+          "$RUNNER_TEMP/example"

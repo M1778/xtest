@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-# =============================================================================
-# Fin Programming Language
-#
-# Made with ❤️ for someone special.
-#
-# This project is genuinely built on love and dedication, a way to express your love can be done through Fin.
-# Fin is a semi-object-orientated programming language that specialized in control, giving so much control to the user while asking for the bare minimum.
-# Fin is the name of the Angel from BlackNightmare-Stories not yet published.
-# “Love is the reason this project exists”
-# -----------------------------------------------------------------------------
-# Author: M1778
-# Repository: https://github.com/M1778/xtest
-# Profile: https://github.com/M1778M/
-# -----------------------------------------------------------------------------
-# Copyright (C) 2027 M1778
-#
-# This file is part of xtest, a project for the Fin Programming Language.
-#
-# Licensed under the MIT License. See LICENSE in the repository root.
-#
-# SPDX-License-Identifier: MIT
-# =============================================================================
-
 """Install a pinned finc release without building the compiler from source.
 
 WHY THIS IS A SCRIPT AND NOT INLINE YAML
@@ -103,13 +80,27 @@ def unpack(archive: Path, dest: Path) -> None:
             zf.extractall(dest)
     else:
         with tarfile.open(archive) as tf:
-            # The archive's sha256 was verified above, so `data` filtering only
-            # rejects entries that could escape `dest` -- and it avoids the
-            # Python 3.14 default change warning. Older Pythons lack the kwarg.
-            try:
-                tf.extractall(dest, filter="data")
-            except TypeError:
-                tf.extractall(dest)
+            tf.extractall(dest)
+
+
+def emit_path(bin_dir: Path) -> None:
+    """Tell the caller where the compiler went, in the form each context reads.
+
+    `::add-path::` is a GitHub Actions workflow command that was retired years ago: it is no
+    longer honoured, and it is no longer even a known command, so printing it into `$GITHUB_ENV`
+    -- which is what a bare `print` in a step does -- puts a line in that file with no `NAME=VALUE`
+    in it and fails the step. Three repositories hit that and worked around it locally.
+
+    When `GITHUB_PATH` is set, append the directory to it, which is the current mechanism.
+    Otherwise print the directory for a human or a shell to use.
+    """
+    target = os.environ.get("GITHUB_PATH")
+    if target:
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(str(bin_dir) + "\n")
+        print(f"added {bin_dir} to $GITHUB_PATH")
+    else:
+        print(str(bin_dir))
 
 
 def main() -> int:
@@ -140,7 +131,7 @@ def main() -> int:
         )
         if out.returncode == 0:
             print(f"finc already installed: {out.stdout.strip()}")
-            print(f"::add-path::{dest / 'bin'}")
+            emit_path(dest / "bin")
             return 0
         print("cached finc does not answer --version; reinstalling", file=sys.stderr)
 
@@ -246,9 +237,7 @@ def main() -> int:
         )
         return 1
 
-    # No `::add-path::` here: GitHub disabled that workflow command, and emitting
-    # it fails the step. Callers put `dest/bin` on PATH themselves, or name the
-    # binary directly.
+    emit_path(dest / "bin")
     return 0
 
 

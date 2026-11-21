@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="example suite" tests="5" failures="0">
+  <testcase name="strings"/>
+  <testcase name="square[0]"/>
+  <testcase name="square[1]"/>
+  <testcase name="square[2]"/>
+  <testcase name="square[3]"/>
+</testsuite>

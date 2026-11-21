@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="lifecycle" tests="9" failures="9">
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+  <testcase name="growth"><failure message="owned diagnostic"/></testcase>
+</testsuite>
